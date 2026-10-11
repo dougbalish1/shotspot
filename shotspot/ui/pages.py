@@ -7,7 +7,6 @@ import numpy as np
 from .fmt import index_of, meters, millis, num, point, seconds, sub, swatch, term, wrap
 from .modes.base import Mode
 from .snapshot import Snapshot
-from .style import SELECTED_WASH
 
 
 def _sensor_link(snap: Snapshot, i: int) -> str:
@@ -98,7 +97,7 @@ def sensors_html(snap: Snapshot, mode: Mode) -> str:
             rows.append(("residual r<sub>i</sub> (m)", [num(_residual(snap, fix, i), 3) for i in range(snap.n)]))
 
     def cell(i: int, text: str, tag: str = "td") -> str:
-        bg = f' bgcolor="{SELECTED_WASH}"' if i == snap.selected else ""
+        bg = f' bgcolor="{snap.theme.selected_wash}"' if i == snap.selected else ""
         return f"<{tag} nowrap{bg}>{text}</{tag}>"
 
     out.append('<table class="data" cellspacing="0"><tr><th></th>')
@@ -121,7 +120,7 @@ def sensors_html(snap: Snapshot, mode: Mode) -> str:
     for i in range(snap.n):
         block = _equation_block(snap, fix, i)
         if i == snap.selected:
-            block = f'<table width="100%" cellpadding="4" bgcolor="{SELECTED_WASH}"><tr><td>{block}</td></tr></table>'
+            block = f'<table width="100%" cellpadding="4" bgcolor="{snap.theme.selected_wash}"><tr><td>{block}</td></tr></table>'
         out.append(block)
     return "\n".join(out)
 

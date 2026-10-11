@@ -12,11 +12,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import numpy as np
 import pytest
 from matplotlib.backend_bases import MouseEvent
+from matplotlib.colors import to_hex
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
 from shotspot.core.presets import PRESETS
 from shotspot.core.scenario import Scenario
 from shotspot.ui.main_window import MainWindow
+from shotspot.ui.style import DARK, LIGHT
 
 
 @pytest.fixture(scope="module")
@@ -33,6 +36,20 @@ def win(app):
     w.refresh()
     yield w
     w.close()
+
+
+@pytest.fixture
+def set_system_palette(app):
+    """Change the app palette the way a system light/dark switch does; restore it afterwards."""
+    original = app.palette()
+
+    def set_palette(button_color):
+        app.setPalette(QPalette(QColor(button_color)))  # derives window/text colors from the button color
+        app.processEvents()
+
+    yield set_palette
+    app.setPalette(original)
+    app.processEvents()
 
 
 def mouse(win, kind, xy, button=1, modifiers=(), step=0):
@@ -169,3 +186,17 @@ def test_panel_link_selects_a_sensor(win):
     win.panel.sensorLinkClicked.emit("S3")
     win.refresh()
     assert win.selected == 2
+
+
+def test_theme_follows_the_system_palette_while_running(win, set_system_palette):
+    win.set_selected(0)
+    for button, theme in [("#efefef", LIGHT), ("#353535", DARK), ("#efefef", LIGHT)]:
+        set_system_palette(button)
+        win.refresh()
+        assert win.theme is theme
+        assert to_hex(win.field.figure.get_facecolor()) == theme.surface
+        page = win.panel.sensors
+        # Unstyled panel text takes the page's palette color, so it must be the theme's ink, not the system's.
+        assert page.palette().color(QPalette.ColorRole.Text).name() == theme.ink
+        assert page.palette().color(QPalette.ColorRole.Base).name() == theme.surface
+        assert theme.selected_wash in page._html and theme.sensor_colors[0] in page._html

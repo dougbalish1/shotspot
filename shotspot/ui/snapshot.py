@@ -1,7 +1,7 @@
 """A snapshot of everything derived from the scenario, computed once per redraw.
 
 The field, the math panel and the active mode all read from the same
-snapshot, so they can never disagree about a number.
+snapshot, so they can never disagree about a number (or a color).
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..core.scenario import Scenario
-from .style import sensor_color
+from .style import Theme
 
 
 @dataclass
@@ -22,6 +22,7 @@ class Snapshot:
     colors: list[str]
     reference: int
     selected: int | None
+    theme: Theme
     # Only available once a shot has been placed:
     shot: np.ndarray | None = None
     distances: np.ndarray | None = None  # true |p − sᵢ|
@@ -29,15 +30,16 @@ class Snapshot:
     times: np.ndarray | None = None  # what the sensors report (true + noise)
 
     @classmethod
-    def take(cls, scenario: Scenario, selected: int | None) -> Snapshot:
+    def take(cls, scenario: Scenario, selected: int | None, theme: Theme) -> Snapshot:
         labels = scenario.labels()
         snap = cls(
             scenario=scenario,
             positions=scenario.positions(),
             labels=labels,
-            colors=[sensor_color(label) for label in labels],
+            colors=[theme.sensor_color(label) for label in labels],
             reference=scenario.reference_index(),
             selected=selected if selected is not None and selected < len(labels) else None,
+            theme=theme,
         )
         if scenario.shot is not None and labels:
             snap.shot = scenario.shot_position()

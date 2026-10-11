@@ -27,7 +27,6 @@ from matplotlib.patches import Rectangle
 from .fmt import usub
 from .modes.base import Handle, Mode
 from .snapshot import Snapshot
-from .style import AXIS, GRID, INK, INK_SECONDARY, MUTED, SURFACE
 
 PICK_RADIUS_PX = 12
 DRAG_THRESHOLD_PX = 4
@@ -56,7 +55,7 @@ class FieldCanvas(FigureCanvasQTAgg):
     cursorMoved = Signal(float, float)
 
     def __init__(self) -> None:
-        fig = Figure(facecolor=SURFACE)
+        fig = Figure()
         super().__init__(fig)
         self.ax = fig.add_subplot()
         fig.subplots_adjust(left=0.06, right=0.985, bottom=0.06, top=0.95)
@@ -116,7 +115,7 @@ class FieldCanvas(FigureCanvasQTAgg):
         self._draw_shot_and_estimate(snap, mode)
         self._handles = mode.handles(snap)
         for h in self._handles:
-            ax.scatter(*h.position, marker=h.marker, s=90, color=h.color, edgecolors=INK, linewidths=1.2, zorder=14)
+            ax.scatter(*h.position, marker=h.marker, s=90, color=h.color, edgecolors=snap.theme.ink, linewidths=1.2, zorder=14)
 
         self._sensors = snap.positions
         self._shot = snap.shot
@@ -124,28 +123,29 @@ class FieldCanvas(FigureCanvasQTAgg):
         self.draw_idle()
 
     def _style_axes(self, snap: Snapshot) -> None:
-        ax = self.ax
-        ax.set_facecolor(SURFACE)
-        ax.grid(True, color=GRID, linewidth=0.7)
+        ax, t = self.ax, snap.theme
+        self.figure.set_facecolor(t.surface)
+        ax.set_facecolor(t.surface)
+        ax.grid(True, color=t.grid, linewidth=0.7)
         ax.set_axisbelow(True)
         for spine in ax.spines.values():
-            spine.set_color(AXIS)
-        ax.tick_params(colors=MUTED, labelsize=8)
-        ax.set_xlabel("x (m)", color=MUTED, fontsize=9)
-        ax.set_ylabel("y (m)", color=MUTED, fontsize=9)
+            spine.set_color(t.axis)
+        ax.tick_params(colors=t.muted, labelsize=8)
+        ax.set_xlabel("x (m)", color=t.muted, fontsize=9)
+        ax.set_ylabel("y (m)", color=t.muted, fontsize=9)
         w, h = snap.scenario.width, snap.scenario.height
-        ax.add_patch(Rectangle((0, 0), w, h, fill=False, edgecolor=AXIS, linewidth=1.0, linestyle=(0, (4, 3)), zorder=1))
+        ax.add_patch(Rectangle((0, 0), w, h, fill=False, edgecolor=t.axis, linewidth=1.0, linestyle=(0, (4, 3)), zorder=1))
 
     def _draw_sensors(self, snap: Snapshot) -> None:
         if snap.n == 0:
             return
-        ax = self.ax
+        ax, t = self.ax, snap.theme
         pos = snap.positions
-        ax.scatter(pos[:, 0], pos[:, 1], marker="^", s=120, c=snap.colors, edgecolors=SURFACE, linewidths=1.5, zorder=10)
+        ax.scatter(pos[:, 0], pos[:, 1], marker="^", s=120, c=snap.colors, edgecolors=t.surface, linewidths=1.5, zorder=10)
         for i, (label, (x, y)) in enumerate(zip(snap.labels, pos)):
             text = f"{label} (ref)" if i == snap.reference else label
             ax.annotate(
-                text, (x, y), xytext=(8, 7), textcoords="offset points", fontsize=10, color=INK,
+                text, (x, y), xytext=(8, 7), textcoords="offset points", fontsize=10, color=t.ink,
                 fontweight="bold" if i == snap.selected else "normal", zorder=11,
             )
         if snap.selected is not None:
@@ -156,36 +156,36 @@ class FieldCanvas(FigureCanvasQTAgg):
         """The selected sensor's distance to the shot, the quantity its equation is about."""
         if snap.selected is None or snap.shot is None:
             return
-        i = snap.selected
+        i, t = snap.selected, snap.theme
         s, p = snap.positions[i], snap.shot
         self.ax.plot([s[0], p[0]], [s[1], p[1]], color=snap.colors[i], linewidth=1.6, linestyle="--", zorder=5)
         mid = (s + p) / 2
         self.ax.annotate(
             f"|p − {usub('s', snap.labels[i])}| = {snap.distances[i]:.2f} m", mid, xytext=(6, -14),
-            textcoords="offset points", fontsize=9, color=INK_SECONDARY, zorder=11,
-            bbox=dict(boxstyle="round,pad=0.2", facecolor=SURFACE, edgecolor="none", alpha=0.85),
+            textcoords="offset points", fontsize=9, color=t.ink_secondary, zorder=11,
+            bbox=dict(boxstyle="round,pad=0.2", facecolor=t.surface, edgecolor="none", alpha=0.85),
         )
 
     def _draw_shot_and_estimate(self, snap: Snapshot, mode: Mode) -> None:
-        ax = self.ax
+        ax, t = self.ax, snap.theme
         legend = []
         if snap.shot is not None:
-            ax.scatter(*snap.shot, marker="*", s=300, color=INK, edgecolors=SURFACE, linewidths=1.0, zorder=12)
-            legend.append(Line2D([], [], marker="*", color=INK, linestyle="none", markersize=13, label="shot (true)"))
+            ax.scatter(*snap.shot, marker="*", s=300, color=t.ink, edgecolors=t.surface, linewidths=1.0, zorder=12)
+            legend.append(Line2D([], [], marker="*", color=t.ink, linestyle="none", markersize=13, label="shot (true)"))
         fix = mode.fix
         if fix is not None:
             ex, ey = fix.position
             if snap.shot is not None:
-                ax.plot([ex, snap.shot[0]], [ey, snap.shot[1]], color=INK_SECONDARY, linewidth=1.0, linestyle=":", zorder=11)
-            ax.scatter([ex], [ey], marker="o", s=170, facecolors="none", edgecolors=INK, linewidths=1.6, zorder=13)
-            ax.scatter([ex], [ey], marker="+", s=170, color=INK, linewidths=1.3, zorder=13)
+                ax.plot([ex, snap.shot[0]], [ey, snap.shot[1]], color=t.ink_secondary, linewidth=1.0, linestyle=":", zorder=11)
+            ax.scatter([ex], [ey], marker="o", s=170, facecolors="none", edgecolors=t.ink, linewidths=1.6, zorder=13)
+            ax.scatter([ex], [ey], marker="+", s=170, color=t.ink, linewidths=1.3, zorder=13)
             legend.append(
-                Line2D([], [], marker="o", markerfacecolor="none", color=INK, linestyle="none", markersize=10,
+                Line2D([], [], marker="o", markerfacecolor="none", color=t.ink, linestyle="none", markersize=10,
                        label=f"estimate ({mode.estimate_source})")
             )
         if legend:
             ax.legend(handles=legend, loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=len(legend),
-                      frameon=False, fontsize=9, borderaxespad=0.2, handletextpad=0.3)
+                      frameon=False, fontsize=9, labelcolor=t.ink, borderaxespad=0.2, handletextpad=0.3)
 
     # ---- mouse -----------------------------------------------------------
 

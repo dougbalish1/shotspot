@@ -4,6 +4,9 @@ Data flow: every edit (mouse, slider, preset, file) changes `self.scenario`,
 then calls `request_refresh`. Refreshes are coalesced: a burst of drag events
 produces one redraw, not dozens. A refresh takes one Snapshot and hands it
 to the mode, the field and the math panel, so all three show the same numbers.
+
+The light or dark theme follows the system palette, including when the user
+switches it while the app is running (Qt sends a PaletteChange).
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -37,6 +40,7 @@ from .math_panel import MathPanel
 from .modes.base import Mode
 from .pages import overview_html, sensors_html
 from .snapshot import Snapshot
+from .style import theme_for
 
 SIGMA_STEP = 1e-4  # seconds per slider tick (0.1 ms)
 SIGMA_MAX_TICKS = 100  # 10 ms
@@ -52,6 +56,7 @@ class MainWindow(QMainWindow):
         self.rng = np.random.default_rng()
         self.scenario = PRESETS["triangle_inside"]()
         self.selected: int | None = None
+        self.theme = theme_for(self.palette())
         self.mode = Mode()
         self._pending_reveal: str | None = None
 
@@ -64,6 +69,7 @@ class MainWindow(QMainWindow):
         self._build_central()
         self._build_status_bar()
         self._connect()
+        self.panel.set_theme(self.theme)
         self._sync_controls()
         self.field.reset_view(self.scenario.width, self.scenario.height)
         self.refresh()
@@ -190,7 +196,7 @@ class MainWindow(QMainWindow):
             self._refresh_timer.start()
 
     def refresh(self) -> None:
-        snap = Snapshot.take(self.scenario, self.selected)
+        snap = Snapshot.take(self.scenario, self.selected, self.theme)
         self.mode.update(snap)
         self.field.render(snap, self.mode)
         self.panel.set_pages(overview_html(snap, self.mode), sensors_html(snap, self.mode), self.mode.method_html(snap))
@@ -279,6 +285,15 @@ class MainWindow(QMainWindow):
         if label:
             self.scenario.reference = label
             self.request_refresh()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.PaletteChange:
+            theme = theme_for(self.palette())
+            if theme is not self.theme:
+                self.theme = theme
+                self.panel.set_theme(theme)
+                self.request_refresh()
 
     def toggle_full_screen(self) -> None:
         self.showMaximized() if self.isFullScreen() else self.showFullScreen()

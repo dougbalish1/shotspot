@@ -4,23 +4,35 @@ Each tab is a QTextBrowser showing HTML. Pages are regenerated on every
 redraw (while dragging, many times a second), so each browser keeps its
 scroll position across updates. Links of the form "sensor:S3" in any page
 select that sensor.
+
+Each page's background and default text color come from the theme, not the
+system palette, so the HTML's own colors (washes, notes) always sit on the
+background they were chosen for.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QTabWidget, QTextBrowser, QVBoxLayout, QWidget
 
-from .style import PANEL_CSS
+from .style import Theme
 
 
 class _Page(QTextBrowser):
     def __init__(self) -> None:
         super().__init__()
         self.setOpenLinks(False)
-        self.document().setDefaultStyleSheet(PANEL_CSS)
         self._html = ""
         self.reset_scroll = False
+
+    def set_theme(self, theme: Theme) -> None:
+        self.document().setDefaultStyleSheet(theme.panel_css())
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Base, QColor(theme.surface))
+        palette.setColor(QPalette.ColorRole.Text, QColor(theme.ink))
+        self.setPalette(palette)
+        self._html = ""  # the stylesheet applies at setHtml, so the next set_html must re-render
 
     def set_html(self, html: str) -> None:
         if html == self._html:
@@ -73,6 +85,10 @@ class MathPanel(QTabWidget):
         for page in (self.overview, self.sensors, self.method):
             page.anchorClicked.connect(self._on_link)
         self.set_steps(0, 0)
+
+    def set_theme(self, theme: Theme) -> None:
+        for page in (self.overview, self.sensors, self.method):
+            page.set_theme(theme)
 
     def set_pages(self, overview: str, sensors: str, method: str) -> None:
         self.overview.set_html(overview)

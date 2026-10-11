@@ -35,6 +35,10 @@ Pause after each mode so the user can review it, unless they say to keep going.
   GDOP a colorbar.
 - Colors are in `ui/style.py`. A sensor's color follows its label number, using the validated categorical
   palette in fixed slot order; past 8 sensors it falls back to gray. Text uses ink colors, never series colors.
+- Light and dark themes: the window picks `LIGHT` or `DARK` from the system palette (`theme_for`), switches
+  live on a `PaletteChange`, and passes the theme in `snap.theme`. Modes draw only with `snap.theme` /
+  `snap.colors`: no hardcoded hex, and no matplotlib default colors, which are black and vanish on the dark field.
+  The panel's unstyled text takes the page's palette Text color (set to `ink`), because Qt ignores `color` on `body`.
 - Panel HTML (QTextBrowser):
   - Avoid combining characters: Qt misplaces the hat in p̂, so write `p<sub>est</sub>`.
   - Parenthesize negatives inside expressions with `fmt.term()` / `fmt.wrap()`.
