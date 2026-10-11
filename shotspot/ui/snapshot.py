@@ -28,9 +28,13 @@ class Snapshot:
     distances: np.ndarray | None = None  # true |p − sᵢ|
     true_times: np.ndarray | None = None  # t₀ + |p − sᵢ|/c
     times: np.ndarray | None = None  # what the sensors report (true + noise)
+    # While the wavefront animation runs: the simulated time, and how much slower than real time it runs.
+    clock: float | None = None
+    slowdown: float = 1.0
 
     @classmethod
-    def take(cls, scenario: Scenario, selected: int | None, theme: Theme) -> Snapshot:
+    def take(cls, scenario: Scenario, selected: int | None, theme: Theme, clock: float | None = None,
+             slowdown: float = 1.0) -> Snapshot:
         labels = scenario.labels()
         snap = cls(
             scenario=scenario,
@@ -46,6 +50,7 @@ class Snapshot:
             snap.distances = scenario.distances()
             snap.true_times = scenario.true_times()
             snap.times = scenario.measured_times()
+            snap.clock, snap.slowdown = clock, slowdown
         return snap
 
     @property
@@ -55,6 +60,16 @@ class Snapshot:
     @property
     def n(self) -> int:
         return len(self.labels)
+
+    @property
+    def animating(self) -> bool:
+        return self.clock is not None
+
+    def reached(self) -> np.ndarray:
+        """Which sensors the wavefront has reached by now (all of them when not animating)."""
+        if self.clock is None:
+            return np.ones(self.n, bool)
+        return self.true_times <= self.clock
 
     @property
     def ready(self) -> bool:

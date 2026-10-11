@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 
-from shotspot.core.tdoa import branch_asymptotes, hyperbola_function, tdoa_pairs
+from shotspot.core.presets import far_field, triangle_inside
+from shotspot.core.tdoa import branch_asymptotes, crossing_angle, hyperbola_function, tdoa_pairs
 
 
 @pytest.mark.parametrize("all_pairs", [False, True])
@@ -34,6 +35,8 @@ def test_asymptotes_belong_to_the_branch(preset):
         asym = branch_asymptotes(s_i, s_j, pair.range_diff)
         assert abs(hyperbola_function(*asym.vertex, s_i, s_j, pair.range_diff)) < 1e-9
         np.testing.assert_allclose(np.linalg.norm(asym.directions, axis=1), 1.0)
+        axis = (s_j - s_i) / np.linalg.norm(s_j - s_i)
+        np.testing.assert_allclose(asym.directions @ axis, np.cos(asym.angle))  # both rays at θ from the axis
         for direction in asym.directions:
             far = asym.center + 1e8 * direction  # the branch hugs its asymptote far away
             assert abs(hyperbola_function(*far, s_i, s_j, pair.range_diff)) < 1e-2
@@ -45,3 +48,21 @@ def test_impossible_time_difference_has_no_hyperbola():
     assert pairs[0].range_diff == pytest.approx(171.5)  # more than the 100 m baseline
     assert not pairs[0].feasible
     assert branch_asymptotes(s_j, s_i, pairs[0].range_diff) is None
+
+
+def test_far_field_curves_cross_at_shallow_angles_and_give_the_bearing():
+    """Far field: the curves cross at a much shallower angle than inside the array, and each pair's
+    far-field bearing, cos θ = c·Δt / baseline, nearly matches the true direction to the shot."""
+    angles = {}
+    for s in (far_field(), triangle_inside()):
+        sensors, shot = s.positions(), s.shot_position()
+        pairs = tdoa_pairs(sensors, s.measured_times(), s.c, s.reference_index())
+        angles[s.name] = crossing_angle(shot, sensors, pairs[0], pairs[1])
+        if s.name == far_field().name:
+            for pair in pairs:
+                s_i, s_j = sensors[pair.i], sensors[pair.j]
+                asym = branch_asymptotes(s_i, s_j, pair.range_diff)
+                to_shot = shot - asym.center
+                true_angle = np.arccos(to_shot @ (s_j - s_i) / (np.linalg.norm(to_shot) * np.linalg.norm(s_j - s_i)))
+                assert np.degrees(abs(asym.angle - true_angle)) < 2.0
+    assert angles[far_field().name] < 20 < angles[triangle_inside().name]

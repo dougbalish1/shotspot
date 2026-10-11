@@ -35,9 +35,10 @@ from PySide6.QtWidgets import (
 
 from ..core.presets import PRESETS
 from ..core.scenario import Scenario
+from .animation import WavefrontAnimation
 from .field import FieldCanvas
 from .math_panel import MathPanel
-from .modes.base import Mode
+from .modes import MODES, Mode
 from .pages import overview_html, sensors_html
 from .snapshot import Snapshot
 from .style import theme_for
@@ -46,7 +47,7 @@ SIGMA_STEP = 1e-4  # seconds per slider tick (0.1 ms)
 SIGMA_MAX_TICKS = 100  # 10 ms
 HINT = (
     "Click: add sensor · Drag: move · Click sensor: select · Right-click: delete · "
-    "Shift-click: fire · Scroll: zoom · Middle-drag: pan · Home: fit view · Esc: deselect"
+    "Shift-click: fire · Scroll: zoom · Ctrl-drag: pan · Home: fit view · Esc: deselect"
 )
 
 
@@ -57,7 +58,9 @@ class MainWindow(QMainWindow):
         self.scenario = PRESETS["triangle_inside"]()
         self.selected: int | None = None
         self.theme = theme_for(self.palette())
-        self.mode = Mode()
+        self.modes = [cls() for cls in MODES]
+        self.mode = self.modes[0]
+        self.animation = WavefrontAnimation(self)
         self._pending_reveal: str | None = None
 
         self._refresh_timer = QTimer(self)
@@ -100,11 +103,18 @@ class MainWindow(QMainWindow):
         self.fire_action.setToolTip("When on, clicking empty space places the shot (F). Shift-click always does.")
         tb.addAction(self.fire_action)
         tb.addAction("Fit view", lambda: self.field.reset_view()).setShortcut("Home")
+        self.animate_action = QAction("Animate", self)
+        self.animate_action.setCheckable(True)
+        self.animate_action.setShortcut("A")
+        self.animate_action.setToolTip("Watch the sound spread from the shot, slowed down (A)")
+        tb.addAction(self.animate_action)
         tb.addSeparator()
 
         tb.addWidget(QLabel(" Mode: "))
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem(self.mode.title)
+        for mode in self.modes:
+            self.mode_combo.addItem(mode.title)
+        self.mode_combo.setToolTip(f"Ctrl+1 … Ctrl+{len(self.modes)} switch modes")
         tb.addWidget(self.mode_combo)
 
     def _build_central(self) -> None:
@@ -141,9 +151,17 @@ class MainWindow(QMainWindow):
         self.ref_combo.setMinimumWidth(70)
         row.addWidget(self.ref_combo)
         row.addStretch()
-        # Modes put their own widgets (sliders, step buttons, …) here in stage 3.
+        # Each mode's own widgets (sliders, toggles, …), shown only while that mode is active.
         self.mode_controls = QWidget()
-        QHBoxLayout(self.mode_controls).setContentsMargins(0, 0, 0, 0)
+        mode_row = QHBoxLayout(self.mode_controls)
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        self._mode_widgets: dict[Mode, list[QWidget]] = {}
+        for mode in self.modes:
+            widget = mode.controls()
+            if widget is not None:
+                mode_row.addWidget(widget)
+                widget.setVisible(mode is self.mode)
+                self._mode_widgets.setdefault(mode, []).append(widget)
         row.addWidget(self.mode_controls)
 
         left = QWidget()
@@ -151,6 +169,12 @@ class MainWindow(QMainWindow):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
         column.addWidget(self.field, stretch=1)
+        for mode in self.modes:  # panels under the field (the sweep's plot), shown only for their mode
+            widget = mode.view()
+            if widget is not None:
+                column.addWidget(widget)
+                widget.setVisible(mode is self.mode)
+                self._mode_widgets.setdefault(mode, []).append(widget)
         column.addWidget(controls)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -175,12 +199,18 @@ class MainWindow(QMainWindow):
         f.shotMoved.connect(self.on_shot_moved)
         f.handleMoved.connect(lambda name, x, y: self.mode.move_handle(name, x, y))
         f.cursorMoved.connect(lambda x, y: self.cursor_label.setText(f"x = {x:7.1f} m   y = {y:7.1f} m"))
+        f.viewChanged.connect(self.request_refresh)
 
         self.panel.sensorLinkClicked.connect(self.select_label)
         self.panel.stepRequested.connect(lambda step: self.mode.set_step(step))
-        self.mode.changed.connect(self.request_refresh)
+        for mode in self.modes:
+            mode.changed.connect(self.request_refresh)
+        self.mode_combo.currentIndexChanged.connect(self.set_mode)
 
         self.fire_action.toggled.connect(self.on_fire_toggled)
+        self.animate_action.toggled.connect(self.on_animate_toggled)
+        self.animation.frame.connect(self.request_refresh)
+        self.animation.finished.connect(lambda: self.animate_action.setChecked(False))
         self.sigma_slider.valueChanged.connect(self.on_sigma_changed)
         self.reroll_button.clicked.connect(self.on_reroll)
         self.c_spin.valueChanged.connect(self.on_c_changed)
@@ -188,6 +218,8 @@ class MainWindow(QMainWindow):
 
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=lambda: self.set_selected(None))
         QShortcut(QKeySequence(Qt.Key.Key_F11), self, activated=self.toggle_full_screen)
+        for n in range(min(len(self.modes), 9)):
+            QShortcut(QKeySequence(f"Ctrl+{n + 1}"), self, activated=lambda n=n: self.mode_combo.setCurrentIndex(n))
 
     # ---- refresh -----------------------------------------------------------
 
@@ -196,11 +228,14 @@ class MainWindow(QMainWindow):
             self._refresh_timer.start()
 
     def refresh(self) -> None:
-        snap = Snapshot.take(self.scenario, self.selected, self.theme)
-        self.mode.update(snap)
-        self.field.render(snap, self.mode)
-        self.panel.set_pages(overview_html(snap, self.mode), sensors_html(snap, self.mode), self.mode.method_html(snap))
-        self.panel.set_steps(self.mode.step, self.mode.step_count(snap))
+        snap = Snapshot.take(self.scenario, self.selected, self.theme, self.animation.clock, self.animation.slowdown)
+        mode = self.mode
+        mode.update(snap)
+        steps = mode.step_count(snap)
+        mode.step = min(max(mode.step, 0), max(steps - 1, 0))  # the scenario may have changed under it
+        self.field.render(snap, mode)
+        self.panel.set_pages(overview_html(snap, mode), sensors_html(snap, mode), mode.method_html(snap))
+        self.panel.set_steps(mode.step, steps)
         self.setWindowTitle(f"ShotSpot: {self.scenario.name}")
         if self._pending_reveal is not None:
             self.panel.reveal(self._pending_reveal)
@@ -219,6 +254,14 @@ class MainWindow(QMainWindow):
         for w in widgets:
             w.blockSignals(False)
         self.sigma_label.setText(f"{self.scenario.sigma * 1e3:.1f} ms")
+
+    def set_mode(self, index: int) -> None:
+        self.mode = self.modes[index]
+        for mode, widgets in self._mode_widgets.items():
+            for widget in widgets:
+                widget.setVisible(mode is self.mode)
+        self.panel.method.reset_scroll = True
+        self.request_refresh()
 
     # ---- selection -------------------------------------------------------
 
@@ -268,6 +311,13 @@ class MainWindow(QMainWindow):
         self.field.fire_mode = on
         self.field.setCursor(Qt.CursorShape.CrossCursor if on else Qt.CursorShape.ArrowCursor)
 
+    def on_animate_toggled(self, on: bool) -> None:
+        if not on:
+            self.animation.stop()
+        elif not self.animation.start(self.scenario):
+            self.animate_action.setChecked(False)  # no shot to animate
+            self.statusBar().showMessage("Fire a shot first (shift-click)", 3000)
+
     def on_sigma_changed(self, ticks: int) -> None:
         self.scenario.sigma = ticks * SIGMA_STEP
         self.sigma_label.setText(f"{self.scenario.sigma * 1e3:.1f} ms")
@@ -301,6 +351,7 @@ class MainWindow(QMainWindow):
     # ---- scenarios -------------------------------------------------------
 
     def set_scenario(self, scenario: Scenario) -> None:
+        self.animate_action.setChecked(False)
         self.scenario = scenario
         self.selected = None
         self._pending_reveal = None

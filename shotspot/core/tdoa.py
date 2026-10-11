@@ -19,6 +19,16 @@ Far from the two sensors a hyperbola straightens out along its asymptotes.
 In the far field every branch is nearly a straight ray from its pair's
 midpoint: the rays still pin down the *direction* to the shot well, but they
 cross at shallow angles, so the *range* is poorly determined.
+
+The asymptotes make an angle θ with the line from sᵢ to sⱼ where
+
+    cos θ = c·Δtᵢⱼ / |sᵢ − sⱼ|
+
+so for a distant shot one time difference across a known baseline gives the
+bearing directly. Where two curves cross, the angle between them is the
+angle between their gradients, ∇f = uᵢ − uⱼ (uᵢ the unit vector from sᵢ
+toward p): near 90° a small timing error barely moves the crossing, while at
+a shallow angle it slides the crossing a long way along the curves.
 """
 
 from __future__ import annotations
@@ -51,6 +61,7 @@ class Asymptotes:
     center: np.ndarray  # midpoint of the two sensors
     vertex: np.ndarray  # the branch's closest point to the center
     directions: np.ndarray  # (2, 2): unit vectors of the two asymptote rays for this branch
+    angle: float  # θ between each ray and the direction from sᵢ to sⱼ: cos θ = range_diff / baseline (radians)
 
 
 def tdoa_pairs(sensors: np.ndarray, times: np.ndarray, c: float, reference: int = 0, all_pairs: bool = False) -> list[TdoaPair]:
@@ -104,4 +115,19 @@ def branch_asymptotes(s_i: np.ndarray, s_j: np.ndarray, range_diff: float) -> As
     center = (s_i + s_j) / 2.0
     along = (range_diff / 2.0) * e  # signed: picks the branch's side
     directions = np.array([along + b * n, along - b * n]) / h  # |along ± b n| = √(a² + b²) = h
-    return Asymptotes(center, center + along, directions)
+    return Asymptotes(center, center + along, directions, float(np.arccos(range_diff / (2.0 * h))))
+
+
+def curve_gradient(p: np.ndarray, s_i: np.ndarray, s_j: np.ndarray) -> np.ndarray:
+    """∇f at p for f(p) = |p − sᵢ| − |p − sⱼ| − c·Δt: the difference of the two unit vectors toward p."""
+    p, s_i, s_j = (np.asarray(v, float) for v in (p, s_i, s_j))
+    return (p - s_i) / np.linalg.norm(p - s_i) - (p - s_j) / np.linalg.norm(p - s_j)
+
+
+def crossing_angle(p: np.ndarray, sensors: np.ndarray, pair_a: TdoaPair, pair_b: TdoaPair) -> float:
+    """The angle (degrees, 0 to 90) at which two pairs' curves cross at p."""
+    sensors = np.asarray(sensors, float)
+    g_a = curve_gradient(p, sensors[pair_a.i], sensors[pair_a.j])
+    g_b = curve_gradient(p, sensors[pair_b.i], sensors[pair_b.j])
+    cos = abs(g_a @ g_b) / (np.linalg.norm(g_a) * np.linalg.norm(g_b))
+    return float(np.degrees(np.arccos(min(cos, 1.0))))

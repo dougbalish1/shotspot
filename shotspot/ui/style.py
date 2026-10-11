@@ -10,6 +10,13 @@ list, so deleting S2 doesn't repaint S3. Sensors past the 8th slot fall back
 to gray. Every sensor is also labeled with text, so color never carries
 identity on its own. DARK uses the same eight hues, each stepped (validated as
 a set) to stand out against the dark surface.
+
+The sequential ramp (for magnitudes, e.g. the accuracy heatmap) is one hue,
+running from the surface outward: light to dark on the light field, dark to
+light on the dark one, so a small value blends into the background and a large
+one stands out. Each theme uses only the half of the blue ramp nearest its
+surface, so ink drawn on top (markers, labels) keeps about 4:1 contrast or more
+anywhere on the map.
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ class Theme:
     selected_wash: str  # background behind the selected sensor's rows in the panel
     sensor_colors: tuple[str, ...]
     overflow_color: str  # sensors past the last slot
+    sequential: tuple[str, ...]  # low → high
 
     def sensor_color(self, label: str) -> str:
         number = label[1:]
@@ -59,6 +67,10 @@ a {{ color: {self.ink}; text-decoration: none; }}
 """
 
 
+# The blue ramp's steps 100 to 700, light to dark.
+BLUES = ("#cde2fb", "#b7d3f6", "#9ec5f4", "#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf",
+         "#1c5cab", "#184f95", "#104281", "#0d366b")
+
 LIGHT = Theme(
     name="light",
     surface="#fcfcfb",
@@ -70,6 +82,7 @@ LIGHT = Theme(
     selected_wash="#f0efec",
     sensor_colors=("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"),
     overflow_color="#898781",
+    sequential=BLUES[:7],  # 100 → 400: black ink stays above 5:1 on the darkest
 )
 
 DARK = Theme(
@@ -83,6 +96,7 @@ DARK = Theme(
     selected_wash="#383835",
     sensor_colors=("#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"),
     overflow_color="#898781",
+    sequential=BLUES[:7:-1],  # 700 → 500: light ink stays above 4:1 on the lightest
 )
 
 

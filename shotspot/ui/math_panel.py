@@ -3,7 +3,7 @@
 Each tab is a QTextBrowser showing HTML. Pages are regenerated on every
 redraw (while dragging, many times a second), so each browser keeps its
 scroll position across updates. Links of the form "sensor:S3" in any page
-select that sensor.
+select that sensor, and "step:2" jumps to that (zero-based) Method step.
 
 Each page's background and default text color come from the theme, not the
 system palette, so the HTML's own colors (washes, notes) always sit on the
@@ -120,3 +120,5 @@ class MathPanel(QTabWidget):
     def _on_link(self, url: QUrl) -> None:
         if url.scheme() == "sensor":
             self.sensorLinkClicked.emit(url.path())
+        elif url.scheme() == "step" and url.path().isdigit():
+            self.stepRequested.emit(int(url.path()))

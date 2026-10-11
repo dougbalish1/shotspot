@@ -7,7 +7,7 @@ Mouse map:
     right-click a sensor           delete it
     shift-click, or Fire mode      place the shot (on empty space)
     scroll wheel                   zoom around the cursor
-    middle-drag                    pan
+    Ctrl-drag or middle-drag       pan (Ctrl-drag works on a touchpad; it never edits anything)
 
 The canvas never edits the scenario itself. It emits signals, the main
 window updates the scenario, and then calls `render` with a fresh snapshot.
@@ -22,7 +22,7 @@ from PySide6.QtCore import Qt, Signal  # import the Qt binding before matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Circle, Rectangle
 
 from .fmt import usub
 from .modes.base import Handle, Mode
@@ -32,6 +32,7 @@ PICK_RADIUS_PX = 12
 DRAG_THRESHOLD_PX = 4
 ZOOM_STEP = 1.2
 FIELD_MARGIN = 0.04  # fraction of the field shown beyond its edges
+FLASH_SECONDS = 0.6  # how long a sensor's flash lasts when the wavefront reaches it (on-screen seconds)
 
 
 @dataclass
@@ -53,6 +54,7 @@ class FieldCanvas(FigureCanvasQTAgg):
     shotMoved = Signal(float, float)
     handleMoved = Signal(str, float, float)
     cursorMoved = Signal(float, float)
+    viewChanged = Signal()  # zoom, pan or resize: overlays computed for the visible area need redrawing
 
     def __init__(self) -> None:
         fig = Figure()
@@ -71,7 +73,7 @@ class FieldCanvas(FigureCanvasQTAgg):
         self.mpl_connect("motion_notify_event", self._on_motion)
         self.mpl_connect("button_release_event", self._on_release)
         self.mpl_connect("scroll_event", self._on_scroll)
-        self.mpl_connect("resize_event", lambda event: self._apply_view())
+        self.mpl_connect("resize_event", self._on_resize)
 
     # ---- view ------------------------------------------------------------
 
@@ -83,6 +85,7 @@ class FieldCanvas(FigureCanvasQTAgg):
         self._view = ((-mx, w + mx), (-my, h + my))
         self._apply_view()
         self.draw_idle()
+        self.viewChanged.emit()
 
     def _apply_view(self) -> None:
         """Show the requested view, widened along one axis so 1 m is the same
@@ -108,12 +111,16 @@ class FieldCanvas(FigureCanvasQTAgg):
     def render(self, snap: Snapshot, mode: Mode) -> None:
         ax = self.ax
         ax.clear()
+        self._apply_view()  # so a mode can see the visible area (e.g. to put a contour grid over it)
         self._style_axes(snap)
-        mode.draw(ax, snap)
-        self._draw_selected_geometry(snap)
+        if snap.animating:  # the wavefront alone: the mode's overlays would only clutter it
+            self._draw_wavefront(snap)
+        else:
+            mode.draw(ax, snap)
+            self._draw_selected_geometry(snap)
         self._draw_sensors(snap)
         self._draw_shot_and_estimate(snap, mode)
-        self._handles = mode.handles(snap)
+        self._handles = [] if snap.animating else mode.handles(snap)
         for h in self._handles:
             ax.scatter(*h.position, marker=h.marker, s=90, color=h.color, edgecolors=snap.theme.ink, linewidths=1.2, zorder=14)
 
@@ -166,12 +173,40 @@ class FieldCanvas(FigureCanvasQTAgg):
             bbox=dict(boxstyle="round,pad=0.2", facecolor=t.surface, edgecolor="none", alpha=0.85),
         )
 
+    def _draw_wavefront(self, snap: Snapshot) -> None:
+        """The sound at the animation's clock: a circle of radius c·(t − t₀) around the shot. Each sensor
+        flashes as the wavefront reaches it, then keeps a ring and shows the arrival time it reported."""
+        ax, t = self.ax, snap.theme
+        radius = snap.c * (snap.clock - snap.scenario.t0)
+        if radius > 0:
+            ax.add_patch(Circle(snap.shot, radius, fill=False, edgecolor=t.ink, linewidth=2.2, zorder=6))
+        for i, (label, position) in enumerate(zip(snap.labels, snap.positions)):
+            if not snap.reached()[i]:
+                continue
+            age = (snap.clock - snap.true_times[i]) * snap.slowdown  # seconds on screen since the wave got there
+            if age < FLASH_SECONDS:
+                grow = age / FLASH_SECONDS
+                ax.scatter(*position, s=(14 + 36 * grow) ** 2, facecolors="none", edgecolors=snap.colors[i],
+                           linewidths=3.0, alpha=1.0 - grow, zorder=9)
+            ax.scatter(*position, s=320, facecolors="none", edgecolors=snap.colors[i], linewidths=2.0, zorder=9)
+            ax.annotate(f"{usub('t', label)} = {snap.times[i]:.6f} s", position, xytext=(8, -14),
+                        textcoords="offset points", fontsize=8, color=t.ink_secondary, zorder=11)
+        elapsed = (snap.clock - snap.scenario.t0) * 1e3
+        ax.text(0.99, 0.98, f"t = {snap.clock:.6f} s  (t₀ + {elapsed:.1f} ms)\nslowed down {snap.slowdown:.1f}×",
+                transform=ax.transAxes, ha="right", va="top", fontsize=9, color=t.ink, zorder=15,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor=t.surface, edgecolor=t.axis, alpha=0.9))
+
     def _draw_shot_and_estimate(self, snap: Snapshot, mode: Mode) -> None:
         ax, t = self.ax, snap.theme
         legend = []
         if snap.shot is not None:
             ax.scatter(*snap.shot, marker="*", s=300, color=t.ink, edgecolors=t.surface, linewidths=1.0, zorder=12)
             legend.append(Line2D([], [], marker="*", color=t.ink, linestyle="none", markersize=13, label="shot (true)"))
+        if snap.animating:
+            legend.append(Line2D([], [], color=t.ink, linewidth=2.2, label="wavefront"))
+            ax.legend(handles=legend, loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=len(legend),
+                      frameon=False, fontsize=9, labelcolor=t.ink, borderaxespad=0.2, handletextpad=0.3)
+            return
         fix = mode.fix
         if fix is not None:
             ex, ey = fix.position
@@ -183,6 +218,7 @@ class FieldCanvas(FigureCanvasQTAgg):
                 Line2D([], [], marker="o", markerfacecolor="none", color=t.ink, linestyle="none", markersize=10,
                        label=f"estimate ({mode.estimate_source})")
             )
+        legend += mode.legend_handles(snap)
         if legend:
             ax.legend(handles=legend, loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=len(legend),
                       frameon=False, fontsize=9, labelcolor=t.ink, borderaxespad=0.2, handletextpad=0.3)
@@ -212,8 +248,9 @@ class FieldCanvas(FigureCanvasQTAgg):
         if event.inaxes is not self.ax or event.xdata is None:
             return
         press = (event.x, event.y)
-        if event.button == 2:  # middle: pan
+        if event.button == 2 or (event.button == 1 and "ctrl" in getattr(event, "modifiers", ())):
             self._drag = _Drag("pan", press_px=press, start_view=(self.ax.get_xlim(), self.ax.get_ylim()))
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
             return
         hit = self._hit(event)
         if event.button == 3:
@@ -274,6 +311,7 @@ class FieldCanvas(FigureCanvasQTAgg):
         )
         self._apply_view()
         self.draw_idle()
+        self.viewChanged.emit()
 
     def _pan(self, drag: _Drag, event) -> None:
         (x0, x1), (y0, y1) = drag.start_view
@@ -283,6 +321,11 @@ class FieldCanvas(FigureCanvasQTAgg):
         self._view = ((x0 - dx, x1 - dx), (y0 - dy, y1 - dy))
         self._apply_view()
         self.draw_idle()
+        self.viewChanged.emit()
+
+    def _on_resize(self, event) -> None:
+        self._apply_view()
+        self.viewChanged.emit()
 
     def _update_cursor(self, event) -> None:
         if event.inaxes is self.ax and self._hit(event) is not None:

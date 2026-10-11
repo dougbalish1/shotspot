@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .fmt import index_of, meters, millis, num, point, seconds, sub, swatch, term, wrap
+from .fmt import index_of, meters, millis, num, point, seconds, sub, swatch, term, wash, wrap
 from .modes.base import Mode
 from .snapshot import Snapshot
 
@@ -35,10 +35,12 @@ def overview_html(snap: Snapshot, mode: Mode) -> str:
         rows.append(("True shot", f"p = {point(snap.shot)} m", f"t<sub>0</sub> = {seconds(sc.t0)}"))
     fix = mode.fix
     if fix is not None:
-        rows.append(("Estimate", f"p<sub>est</sub> = {point(fix.position)} m", f"t<sub>0,est</sub> = {seconds(fix.t0)}"))
+        t0_text = "t<sub>0</sub> given, not estimated" if mode.t0_is_given else f"t<sub>0,est</sub> = {seconds(fix.t0)}"
+        rows.append(("Estimate", f"p<sub>est</sub> = {point(fix.position)} m", t0_text))
         if snap.shot is not None:
             error = float(np.linalg.norm(fix.position - snap.shot))
-            rows.append(("Error", f"|p<sub>est</sub> − p| = {meters(error)}", f"t<sub>0,est</sub> − t<sub>0</sub> = {millis(fix.t0 - sc.t0)}"))
+            t0_error = "" if mode.t0_is_given else f"t<sub>0,est</sub> − t<sub>0</sub> = {millis(fix.t0 - sc.t0)}"
+            rows.append(("Error", f"|p<sub>est</sub> − p| = {meters(error)}", t0_error))
     elif snap.ready:
         rows.append(("Estimate", "no fix: the solver couldn't determine a position", ""))
     rows.append(("Speed of sound", f"c = {num(sc.c, 1)} m/s", ""))
@@ -85,15 +87,22 @@ def sensors_html(snap: Snapshot, mode: Mode) -> str:
     ]
     if has_shot:
         dt = snap.times - snap.times[snap.reference]
+        # While animating, a sensor's numbers appear only once the wavefront has reached it.
+        heard = snap.reached()
+        both = heard & heard[snap.reference]
+
+        def live(values, known):
+            return [v if ok else "—" for v, ok in zip(values, known)]
+
         rows += [
             ("|p − s<sub>i</sub>| (m)", [num(d) for d in snap.distances]),
-            ("t<sub>i</sub> (s)", [num(t, 6) for t in snap.times]),
-            (f"t<sub>i</sub> − t<sub>{k}</sub> (ms)", [num(v * 1e3, 3) for v in dt]),
-            (f"c·(t<sub>i</sub> − t<sub>{k}</sub>) (m)", [num(snap.c * v) for v in dt]),
+            ("t<sub>i</sub> (s)", live([num(t, 6) for t in snap.times], heard)),
+            (f"t<sub>i</sub> − t<sub>{k}</sub> (ms)", live([num(v * 1e3, 3) for v in dt], both)),
+            (f"c·(t<sub>i</sub> − t<sub>{k}</sub>) (m)", live([num(snap.c * v) for v in dt], both)),
         ]
         if noisy:
-            rows.append(("noise (ms)", [num(v * 1e3, 3) for v in snap.times - snap.true_times]))
-        if fix is not None:
+            rows.append(("noise (ms)", live([num(v * 1e3, 3) for v in snap.times - snap.true_times], heard)))
+        if fix is not None and not snap.animating:
             rows.append(("residual r<sub>i</sub> (m)", [num(_residual(snap, fix, i), 3) for i in range(snap.n)]))
 
     def cell(i: int, text: str, tag: str = "td") -> str:
@@ -112,6 +121,10 @@ def sensors_html(snap: Snapshot, mode: Mode) -> str:
     if not has_shot:
         out.append('<p class="note">Fire a shot (shift-click) to see arrival times and equations.</p>')
         return "\n".join(out)
+    if snap.animating:
+        out.append(f'<p class="note">Animating, {snap.slowdown:.1f}× slower than real time: each sensor\'s arrival '
+                   "time appears as the wavefront reaches it. The equations come back when it ends.</p>")
+        return "\n".join(out)
 
     out.append(
         '<p class="muted">Click a sensor on the field, or its name above, to highlight it. '
@@ -120,7 +133,7 @@ def sensors_html(snap: Snapshot, mode: Mode) -> str:
     for i in range(snap.n):
         block = _equation_block(snap, fix, i)
         if i == snap.selected:
-            block = f'<table width="100%" cellpadding="4" bgcolor="{snap.theme.selected_wash}"><tr><td>{block}</td></tr></table>'
+            block = wash(block, snap.theme.selected_wash)
         out.append(block)
     return "\n".join(out)
 

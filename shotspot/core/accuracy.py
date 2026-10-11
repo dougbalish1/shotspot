@@ -31,6 +31,23 @@ from .gauss_newton import gauss_newton
 from .geometry import ON_SENSOR
 
 SINGULAR_DET = 1e-10  # relative determinant below which JᵀJ is treated as singular
+SIGMA_95 = float(np.sqrt(-2.0 * np.log(0.05)))  # 2.448: the n_sigma whose 2D ellipse holds 95% of the points
+
+
+def ellipse_probability(n_sigma: float) -> float:
+    """Chance that a 2D Gaussian point lands inside its n_sigma ellipse: 1 − exp(−n²/2).
+    (39.3% for 1σ, which surprises people used to 68% in one dimension.)"""
+    return float(1.0 - np.exp(-0.5 * n_sigma**2))
+
+
+def fraction_inside(points: np.ndarray, center: np.ndarray, cov: np.ndarray, n_sigma: float) -> float:
+    """Fraction of the points inside the n_sigma ellipse of a 2×2 covariance.
+    A point is inside when its Mahalanobis distance √(dᵀ·Cov⁻¹·d) is at most n_sigma."""
+    d = np.asarray(points, float) - np.asarray(center, float)
+    if len(d) == 0:
+        return float("nan")
+    m2 = np.einsum("ni,ij,nj->n", d, np.linalg.inv(cov), d)
+    return float(np.mean(m2 <= n_sigma**2))
 
 
 def jacobian_at(p: np.ndarray, sensors: np.ndarray, c: float) -> np.ndarray:
