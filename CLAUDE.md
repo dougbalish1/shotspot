@@ -17,7 +17,8 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 1. Core model, solvers and tests: **done**
 2. Field editing (sensors/shot), controls, presets, save/load, Overview and Per-sensor tabs: **done**
 3. The six modes, one at a time, in spec order: known t₀ → t₀ sweep → TDOA hyperbolas → closed form →
-   Gauss-Newton → accuracy/GDOP (+ Monte Carlo). Then the wavefront animation. **Not started.**
+   Gauss-Newton → accuracy/GDOP (+ Monte Carlo). Then the wavefront animation. **Done**, awaiting the
+   user's review (known t₀ was reviewed; the rest were built in one session with their OK).
 
 Pause after each mode so the user can review it, unless they say to keep going.
 
@@ -29,21 +30,36 @@ Pause after each mode so the user can review it, unless they say to keep going.
 - `shotspot/ui/`: `MainWindow` owns the `Scenario`. Every edit calls `request_refresh()` (a coalesced
   0 ms timer), and `refresh()` runs: `Snapshot.take` → `mode.update` → `field.render` → `panel.set_pages`.
 - New modes subclass `ui/modes/base.py::Mode` (`update`, `draw`, `method_html`; optionally `controls`,
-  `handles`/`move_handle` for draggable points, and `step_count`/`set_step` for Prev/Next). Register them in
-  the toolbar's mode combo, which currently lists only "Field". Mode widgets go in `MainWindow.mode_controls`.
-- `FieldCanvas` has a single axes. The sweep mode will need a residual-vs-t₀ strip below the field, and
-  GDOP a colorbar.
+  `handles`/`move_handle` for draggable points, and `step_count`/`set_step` for Prev/Next) and are added to
+  `MODES` in `ui/modes/__init__.py`. The window keeps one instance of each (state survives switching), fills the
+  mode combo (Ctrl+1…) from it, shows each mode's `controls()` widget only while it is active, and clamps
+  `mode.step` after `update`. `ui/modes/known_t0.py` is the pattern: a `STEPS` list, `roadmap()` at the top of
+  the Method page, one builder per step, and per-sensor rows anchored and washed via `_sensor_block`.
+  Set `t0_is_given` for a mode that doesn't estimate t₀.
+- `FieldCanvas` has a single axes. A mode that needs another plot gives it its own canvas via `view()`
+  (shown between the field and the control strip), as the sweep's residual-vs-t₀ plot does. Extra legend
+  entries come from `legend_handles()`.
+- `FieldCanvas.render` applies the view *before* `mode.draw`, so a mode can read `ax.get_xlim()` (the
+  hyperbola contours are computed on a grid over the visible area). Zoom, pan, resize and Fit view emit
+  `viewChanged`, which requests a refresh.
+- Field mouse: Ctrl-drag pans (the user is on a touchpad, so middle-drag isn't enough); left-click on empty
+  space adds a sensor on press, which is why panning needs the modifier.
 - Colors are in `ui/style.py`. A sensor's color follows its label number, using the validated categorical
   palette in fixed slot order; past 8 sensors it falls back to gray. Text uses ink colors, never series colors.
 - Light and dark themes: the window picks `LIGHT` or `DARK` from the system palette (`theme_for`), switches
   live on a `PaletteChange`, and passes the theme in `snap.theme`. Modes draw only with `snap.theme` /
   `snap.colors`: no hardcoded hex, and no matplotlib default colors, which are black and vanish on the dark field.
   The panel's unstyled text takes the page's palette Text color (set to `ink`), because Qt ignores `color` on `body`.
+- The wavefront animation (`ui/animation.py`) only keeps a clock; the window passes it in `snap.clock`, the
+  field then draws the wavefront instead of the mode's overlays, and `snap.reached()` hides arrival times
+  the wave hasn't delivered yet.
 - Panel HTML (QTextBrowser):
   - Avoid combining characters: Qt misplaces the hat in p̂, so write `p<sub>est</sub>`.
   - Parenthesize negatives inside expressions with `fmt.term()` / `fmt.wrap()`.
   - Table cells are `nowrap`.
-  - Sensor anchors are `sensor-S3`, and links are `sensor:S3`.
+  - Sensor anchors are `sensor-S3`, and links are `sensor:S3`. `step:N` (zero-based) jumps to a Method step.
+    Give every step's per-sensor rows anchors, so selecting a sensor keeps the reader on the Method tab.
+  - `fmt.big()` switches to scientific notation from 10⁶ (`term()` uses it), and units are joined with `&nbsp;`.
 
 ## Numerical lessons (already handled; don't regress)
 
@@ -57,6 +73,15 @@ Pause after each mode so the user can review it, unless they say to keep going.
   from starts well outside the array (realistic, and a teaching point). The initial t₀ doesn't affect the
   path, because the residual is linear in t₀.
 - **Covariance:** computed via the SVD of the scaled J. Position error = `dilution(geometry)` × cσ.
+- **Sweep speed:** `core/sweep.py` refines all guesses at once (batched Gauss-Newton with per-row step halving,
+  rows dropping out as they converge or settle) and golden-section-refines each dip. ~40 ms for 400 guesses;
+  the one-guess-at-a-time loop took 0.5-1.6 s. The mode still throttles recomputation during drags.
+- **Sweep dips:** plateau ripples are not dips (`_dip_indices`); the lowest minimum always counts.
+- **Slow modes:** the sweep and the GDOP map use `modes.base.Throttle` to redo their heavy work at most every
+  200 ms during drags. The GDOP panel's canvases redraw only when their inputs change.
+- **Heatmap colors:** each theme's `sequential` ramp is only the half of the blue ramp nearest its surface, so
+  ink on top keeps ≥4:1 contrast. The GDOP map is drawn above the grid (zorder 0.6) and the ellipses carry a
+  surface-colored halo.
 - **Presets:**
   - `triangle_ambiguous` uses a smaller triangle so both solutions fit on the field. The shot is at
     (900, 140) and the phantom near (687.7, 296.4). GN started from the array centroid converges to the phantom.
