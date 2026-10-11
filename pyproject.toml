@@ -1,0 +1,19 @@
+[project]
+name = "shotspot"
+version = "0.1.0"
+description = "Educational simulator for acoustic gunshot localization (multilateration) that shows the work"
+requires-python = ">=3.10"
+dependencies = ["numpy", "matplotlib", "PySide6"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["shotspot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

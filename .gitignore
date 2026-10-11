@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Claude Code: personal, machine-local settings (CLAUDE.md itself is shared)
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Scenarios you save while experimenting (presets live in code)
+/*.json
