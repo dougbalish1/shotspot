@@ -260,6 +260,8 @@ class ClosedFormMode(Mode):
             f'<p class="eq">C = {big(float(q.w @ q.w))} − {big((c * tk) ** 2)} = {big(q.qc)}</p>',
             f'<p class="eq"><b>{big(q.qa)}·{T0}²{plus(q.qb)}·{T0}{plus(q.qc)} = 0</b></p>',
             f'<p class="eq">D = B² − 4AC = {big(q.discriminant)}</p>',
+            '<p class="note">D is the discriminant: it decides how many real roots there are, two if positive, one if '
+            "zero, none if negative.</p>",
         ]
         roots = [cand.t0 for cand in r.candidates]
         if len(roots) == 2:
@@ -392,8 +394,10 @@ class ClosedFormMode(Mode):
             "<p>Normally 3+ linear equations fix x, y and t<sub>0</sub>. Here they can't: the t<sub>0</sub> column is a "
             "combination of the x and y columns, so t<sub>0</sub> drops out of the system entirely. This happens even in "
             "good layouts, for example a square of sensors with the shot on one of its lines of symmetry.</p>",
-            f"<p>The test is the singular values of the system (with each column scaled to unit length): {sv}. The "
-            "last is zero to rounding, so the matrix has rank 2, not 3.</p>",
+            "<p>The test is the system's <i>singular values</i>: how strongly it responds along each of three "
+            "independent directions in (x, y, t<sub>0</sub>), a zero one being a direction the equations can't see "
+            f"(computed with each column scaled to unit length): {sv}. The last is zero to rounding, so the matrix has "
+            "rank 2, not 3: only two independent equations, which is what the <i>rank</i> counts.</p>",
             "<p>The way out is the 3-sensor route: solve for x and y in terms of t<sub>0</sub>, then use a quadratic "
             "for t<sub>0</sub>.</p>",
         ])

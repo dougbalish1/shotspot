@@ -28,7 +28,7 @@ from shotspot.core.closed_form import solve_closed_form
 from shotspot.ui.modes.known_t0 import CHECK, CIRCLES, STEPS, SUBTRACT, T0_ERROR
 from shotspot.ui.modes.accuracy import ELLIPSE, FALLBACK_SIGMA, TRIALS
 from shotspot.ui.modes.hyperbolas import CROSSING, SIGN
-from shotspot.ui.modes.t0_sweep import SLIDER_TICK, START
+from shotspot.ui.modes.t0_sweep import PLAY_SECONDS, SLIDER_TICK, START
 from shotspot.ui.style import DARK, LIGHT
 
 
@@ -409,6 +409,33 @@ def contours_on_field(win):
     return [c for c in win.field.ax.collections if isinstance(c, ContourSet)]
 
 
+def test_sweep_play_carries_the_guess_across_the_range_and_stops_when_touched(win):
+    use_mode(win, SweepMode)
+    view = win.mode.view()
+    clock = [100.0]
+    view._now = lambda: clock[0]
+    view.play.click()
+    win.refresh()
+    lo, hi = win.mode.t0_range
+    assert view.play.isChecked() and win.mode.t0_guess == pytest.approx(lo)
+    clock[0] += PLAY_SECONDS / 2
+    view._play_tick()
+    win.refresh()
+    assert win.mode.t0_guess == pytest.approx((lo + hi) / 2)
+    clock[0] += PLAY_SECONDS
+    view._play_tick()
+    win.refresh()
+    assert not view.play.isChecked() and win.mode.t0_guess == pytest.approx(hi)
+    view.play.click()
+    assert view.play.isChecked()
+    view.slider.sliderPressed.emit()  # the user taking over stops it
+    assert not view.play.isChecked()
+    view.play.click()
+    win.clear_scenario()
+    win.refresh()
+    assert not view.play.isChecked() and not view.play.isEnabled()
+
+
 def test_hyperbolas_one_curve_per_pair_and_all_pairs_adds_the_rest(win):
     use_mode(win, HyperbolaMode)
     win.load_preset("square_four")
@@ -547,9 +574,32 @@ def test_gauss_newton_start_is_draggable_and_far_starts_diverge(win):
     assert len(win.scenario.sensors) == 3
     assert win.mode.result.status == "diverged" and win.mode.fix is None
     assert "Drag the diamond closer" in step_through(win)[-1]
-    win.mode.controls().click()  # Reset start
+    win.mode.reset_button.click()  # Reset start
     win.refresh()
     np.testing.assert_allclose(win.mode.start, win.scenario.positions().mean(axis=0))
+
+
+def test_gauss_newton_damping_rescues_a_far_start(win):
+    use_mode(win, GaussNewtonMode)
+    win.load_preset("square_four")
+    win.refresh()  # the mode resets its start when it first sees a new scenario
+    win.mode.move_handle("start", 50.0, 50.0)
+    win.refresh()
+    assert win.mode.result.status == "diverged"
+    assert "turn on <i>Damped</i>" in step_through(win)[-1]
+    box = win.mode.controls().findChild(QCheckBox)
+    box.setChecked(True)
+    win.refresh()
+    assert win.mode.damped and win.mode.result.converged
+    np.testing.assert_allclose(win.mode.fix.position, win.scenario.shot, atol=1e-6)
+    assert win.mode.estimate_source.startswith("damped")
+    pages = step_through(win)
+    assert "<b>Damped.</b>" in pages[0]
+    assert any("Damping halved it" in page for page in pages[1:-1])
+    assert "Damping shortened" in pages[-1]
+    box.setChecked(False)
+    win.refresh()
+    assert not win.mode.damped and win.mode.result.status == "diverged"
 
 
 def test_gauss_newton_can_converge_to_the_other_solution(win):

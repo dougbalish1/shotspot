@@ -196,7 +196,9 @@ class HyperbolaMode(Mode):
         out = [
             "<h3>Step 2. Each pair is a hyperbola</h3>",
             "<p>All the points whose distances to two sensors differ by a fixed amount form one branch of a "
-            "hyperbola, with the two sensors as its foci. Each curve is drawn where the function</p>",
+            "hyperbola, with the two sensors as its <i>foci</i>: that is what a hyperbola is, as a circle is the points "
+            "at a fixed distance from one point, and it has two mirror-image halves, its <i>branches</i>. Each curve is "
+            "drawn where the function</p>",
             '<p class="eq">f(p) = |p − s<sub>i</sub>| − |p − s<sub>j</sub>| − c·Δt</p>',
             "<p>is zero: f is computed on a grid over the visible field and traced where it changes sign. "
             "At the true shot p:</p>",
@@ -289,9 +291,9 @@ class HyperbolaMode(Mode):
     def _far(self, snap: Snapshot) -> str:
         out = [
             "<h3>Step 5. Far field: good bearing, poor range</h3>",
-            "<p>Far from its two sensors, each branch straightens out along two straight lines from the pair's "
-            "midpoint, its asymptotes (dotted on the field). They make an angle θ with the line from s<sub>i</sub> "
-            "to s<sub>j</sub>, where</p>",
+            "<p>Far from its two sensors (the <i>far field</i>: distances large compared with the sensor spacing), each "
+            "branch straightens out along two straight lines from the pair's midpoint, its <i>asymptotes</i> (dotted on "
+            "the field). They make an angle θ with the line from s<sub>i</sub> to s<sub>j</sub>, where</p>",
             '<p class="eq">cos θ = c·Δt / |s<sub>i</sub> − s<sub>j</sub>|</p>',
             "<p>So for a distant shot, one time difference across a known baseline gives the <i>direction</i> to "
             "the shot. Seen from each pair's midpoint:</p>",

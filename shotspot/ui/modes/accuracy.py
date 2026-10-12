@@ -263,7 +263,11 @@ class AccuracyMode(Mode):
             return "\n".join(out)
         P = self.position_cov
         sx, sy = np.sqrt(P[0, 0]), np.sqrt(P[1, 1])
-        out.append(f"<p>The position part of the covariance (m²):</p>{matrix(P)}")
+        out.append(
+            "<p>The covariance matrix collects the expected squared errors: the variances σ<sub>x</sub>² and "
+            "σ<sub>y</sub>² on its diagonal, and off it how the x and y errors move together. Its position part (m²):</p>"
+            + matrix(P)
+        )
         out.append(
             f'<p class="eq">σ<sub>x</sub> = {length(sx)},&nbsp; σ<sub>y</sub> = {length(sy)},&nbsp; '
             f"<b>DRMS = √(σ<sub>x</sub>² + σ<sub>y</sub>²) = {length(drms(P))}</b></p>"
@@ -308,8 +312,9 @@ class AccuracyMode(Mode):
         bearing = np.degrees(np.arctan2(sight[1], sight[0]))
         off = abs((np.degrees(angle) - bearing + 90) % 180 - 90)  # angle between two undirected lines, 0 to 90°
         out.append(
-            "<p>The error isn't the same in every direction. The covariance's eigenvectors point along the largest and "
-            "smallest error, and the square roots of its eigenvalues are their sizes:</p>"
+            "<p>The error isn't the same in every direction. The covariance's eigenvectors (the two directions it "
+            "stretches along, always at right angles) point along the largest and smallest error, and the square roots "
+            "of its eigenvalues (how much it stretches each way) are their sizes:</p>"
             f'<p class="eq">semi-axes {length(major)} and {length(minor)}, the long one at {num(np.degrees(angle) % 180, 1)}° '
             "from the x axis</p>"
             f'<p class="eq">line of sight from the array\'s center to the shot: {num(bearing % 180, 1)}°, '
@@ -347,7 +352,8 @@ class AccuracyMode(Mode):
         if mc is None:
             out.append("<p>Press <i>Run trials</i> under the field. It fires that many shots from the same spot, each "
                        "with fresh random timing noise, locates every one, and scatters the fixes so the predicted "
-                       "ellipse can be compared with what actually happens.</p>")
+                       "ellipse can be compared with what actually happens. (That is a Monte Carlo test: repeat the "
+                       "experiment with fresh random noise many times and look at the spread.)</p>")
             return "\n".join(out)
         n = len(mc.estimates)
         cluster = self.cluster

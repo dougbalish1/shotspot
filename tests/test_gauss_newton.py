@@ -114,3 +114,35 @@ def test_too_few_sensors():
     sensors = np.array([[0.0, 0.0], [100.0, 0.0]])
     result = gauss_newton(sensors, np.array([3.0, 3.1]), 343.0, np.array([50.0, 50.0]))
     assert result.status == "too_few_sensors"
+
+
+def test_damping_rescues_a_start_that_diverges_undamped():
+    s = square_four()
+    sensors, times, start = s.positions(), s.measured_times(), np.array([50.0, 50.0])
+    assert gauss_newton(sensors, times, s.c, start).status == "diverged"
+    damped = gauss_newton(sensors, times, s.c, start, damped=True)
+    assert damped.converged
+    np.testing.assert_allclose(damped.position, s.shot, atol=1e-6)
+    shortened = [it for it in damped.iterations[:-1] if it.step_scale < 1]
+    assert shortened
+    for it in shortened:
+        halvings = -np.log2(it.step_scale)
+        assert halvings == pytest.approx(round(halvings))  # a step is shortened by halving, nothing else
+        assert it.full_step_cost > it.cost  # the full step would have made things worse
+        assert damped.iterations[it.k + 1].cost <= it.cost  # the shortened one didn't
+
+
+def test_damping_never_lets_the_cost_rise():
+    for preset in (triangle_inside(), square_four(), triangle_ambiguous()):
+        sensors, times = preset.positions(), preset.measured_times()
+        for start in ([950.0, 950.0], [-500.0, 500.0], [0.0, 1000.0]):
+            result = gauss_newton(sensors, times, preset.c, np.array(start), damped=True)
+            costs = [it.cost for it in result.iterations]
+            assert all(later <= earlier for earlier, later in zip(costs, costs[1:]))
+            assert result.status in ("converged", "diverged", "stalled")
+
+
+def test_undamped_steps_are_always_full():
+    s = triangle_inside()
+    result = gauss_newton(s.positions(), s.measured_times(), s.c, np.array([500.0, 500.0]))
+    assert all(it.step_scale == 1.0 and it.full_step_cost is None for it in result.iterations)

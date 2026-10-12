@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QPushButton, QWidget
 
 from ...core.accuracy import Fix
 from ...core.gauss_newton import GNIteration, GNResult, gauss_newton
@@ -31,33 +31,56 @@ STATUS = {
     "singular": "stopped: JᵀJ is singular here, so the step is undefined",
     "hit_sensor": "stopped: the estimate landed on a sensor, where the direction uᵢ is undefined",
     "diverged": "diverged: the estimate ran off toward infinity",
+    "stalled": "stalled: no fraction of the step lowered Σr², so this is a local minimum (or the numerical floor)",
     "too_few_sensors": "needs at least 3 sensors",
 }
 
 
 class GaussNewtonMode(Mode):
     title = "Gauss-Newton"
-    estimate_source = "Gauss-Newton from the diamond"
     summary = (
         "Start from a guess for all three unknowns (x, y, t₀) and improve it: approximate each sensor's "
-        "residual by a straight line around the guess, solve for the step that best zeroes them all, take "
-        "it, and repeat. Near the answer it converges in a few steps. From a poor start it can run away, or "
-        "settle on the other solution of an ambiguous layout: drag the diamond to try."
+        "residual (how far the guess is from satisfying that sensor's equation) by a straight line around the "
+        "guess, solve for the step that best zeroes them all, take it, and repeat. Near the answer it converges "
+        "in a few steps. From a poor start it can run away, or settle on the other solution of an ambiguous "
+        "layout: drag the diamond to try, and turn on Damped to see the usual safeguard."
     )
 
     def __init__(self) -> None:
         super().__init__()
         self.start: np.ndarray | None = None
         self.result: GNResult | None = None
+        self.damped = False
         self._scenario = None
-        self._button: QPushButton | None = None
+        self._controls: QWidget | None = None
+        self.damped_box: QCheckBox | None = None
+        self.reset_button: QPushButton | None = None
 
-    def controls(self) -> QPushButton:
-        if self._button is None:
-            self._button = QPushButton("Reset start")
-            self._button.setToolTip("Move the starting guess back to the middle of the sensor array")
-            self._button.clicked.connect(self.reset_start)
-        return self._button
+    @property
+    def estimate_source(self) -> str:
+        return ("damped " if self.damped else "") + "Gauss-Newton from the diamond"
+
+    def controls(self) -> QWidget:
+        if self._controls is None:
+            self._controls = QWidget()
+            row = QHBoxLayout(self._controls)
+            row.setContentsMargins(0, 0, 0, 0)
+            self.damped_box = QCheckBox("Damped")
+            self.damped_box.setToolTip(
+                "Halve any step that would make Σr² larger, until it doesn't (a simple line search).\n"
+                "Plain Gauss-Newton takes every step in full and can run away from a poor start."
+            )
+            self.damped_box.toggled.connect(self._set_damped)
+            self.reset_button = QPushButton("Reset start")
+            self.reset_button.setToolTip("Move the starting guess back to the middle of the sensor array")
+            self.reset_button.clicked.connect(self.reset_start)
+            row.addWidget(self.damped_box)
+            row.addWidget(self.reset_button)
+        return self._controls
+
+    def _set_damped(self, on: bool) -> None:
+        self.damped = on
+        self.changed.emit()
 
     def reset_start(self) -> None:
         self.start = None
@@ -80,7 +103,7 @@ class GaussNewtonMode(Mode):
             self.start = snap.positions.mean(axis=0)
         if not snap.ready:
             return
-        self.result = gauss_newton(snap.positions, snap.times, snap.c, self.start)
+        self.result = gauss_newton(snap.positions, snap.times, snap.c, self.start, damped=self.damped)
         if self.result.converged:
             self.fix = Fix(self.result.position, self.result.t0, "gauss_newton")
 
@@ -195,8 +218,20 @@ class GaussNewtonMode(Mode):
             f"{num(first.distances[j])} / {num(snap.c, 1)} = {seconds(t0)}</p>",
             '<p class="note">That choice hardly matters: every residual is linear in t<sub>0</sub>, so the first step fixes any '
             "error in it exactly. Only the starting <i>position</i> decides where Gauss-Newton ends up.</p>",
-            "<p>The residuals at the start:</p>",
         ]
+        if self.damped:
+            out.append(
+                "<p><b>Damped.</b> Whenever a full step would make Σr<sub>i</sub>² larger, it is halved, and halved again, "
+                "until it doesn't. This simple safeguard (a <i>line search</i>) is what keeps a real solver from running "
+                "away from a poor start; Levenberg-Marquardt, the usual choice, bends the step toward plain downhill "
+                "instead, with the same intent.</p>"
+            )
+        else:
+            out.append(
+                '<p class="note">Plain Gauss-Newton: every step is taken in full, whatever it does to Σr<sub>i</sub>². '
+                "Turn on <i>Damped</i> under the field to see the usual safeguard.</p>"
+            )
+        out.append("<p>The residuals at the start:</p>")
         out += self._residual_rows(snap, first, with_jacobian=False)
         out.append(f'<p class="eq">Σr<sub>i</sub>² = {big(first.cost)} m²</p>')
         out.append('<p class="note">On the field: each sensor\'s circle for this t<sub>0</sub>, and its residual as the '
@@ -209,17 +244,18 @@ class GaussNewtonMode(Mode):
         out = [
             f"<h3>Iteration {nxt.k}</h3>",
             f"<p>From (x, y, t<sub>0</sub>) = ({num(x)}, {num(y)}, {seconds(t0)}). Near the guess, each residual is "
-            "approximately a straight-line function of a small change Δ = (Δx, Δy, Δt<sub>0</sub>):</p>",
+            "approximately a straight-line function of a small change Δ = (Δx, Δy, Δt<sub>0</sub>), with its slopes "
+            "collected in a row of the <i>Jacobian</i> J:</p>",
             '<p class="eq">r<sub>i</sub>(guess + Δ) ≈ r<sub>i</sub> + J<sub>i</sub>·Δ,&nbsp;&nbsp; J<sub>i</sub> = '
             "[u<sub>ix</sub>, u<sub>iy</sub>, c]</p>",
-            "<p>u<sub>i</sub> is the unit vector from sensor i toward the guess (moving one meter along it adds one meter of "
-            "distance), and making t<sub>0</sub> later by one second adds c meters to r<sub>i</sub>. Residuals and Jacobian rows "
-            "here:</p>",
+            "<p>u<sub>i</sub> is the unit vector (length 1) from sensor i toward the guess (moving one meter along it adds "
+            "one meter of distance), and making t<sub>0</sub> later by one second adds c meters to r<sub>i</sub>. "
+            "Residuals and Jacobian rows here:</p>",
         ]
         out += self._residual_rows(snap, it, with_jacobian=True)
         out.append(
-            "<p>The Δ that makes Σ(r<sub>i</sub> + J<sub>i</sub>·Δ)² smallest solves the <i>normal equations</i> "
-            "JᵀJ·Δ = −Jᵀr:</p>"
+            "<p>The Δ that makes Σ(r<sub>i</sub> + J<sub>i</sub>·Δ)² smallest solves the <i>normal equations</i>, the "
+            "derivative of that sum set to zero, JᵀJ·Δ = −Jᵀr:</p>"
         )
         out.append(f"<p>JᵀJ =</p>{matrix(it.normal_matrix)}")
         out.append(
@@ -227,8 +263,17 @@ class GaussNewtonMode(Mode):
             "the t<sub>0</sub> column is in seconds while x and y are in meters.</p>"
         )
         out.append(f'<p class="eq">−Jᵀr = {vector(-it.gradient)}</p>')
-        dx, dy, dt = it.step
+        dx, dy, dt = it.step / it.step_scale  # the full Gauss-Newton step
         out.append(f'<p class="eq"><b>Δ = ({num(dx)} m, {num(dy)} m, {millis(dt)})</b></p>')
+        if it.step_scale < 1:
+            n = round(-np.log2(it.step_scale))
+            sx, sy, st = it.step
+            full_cost = big(it.full_step_cost) if np.isfinite(it.full_step_cost) else "∞"
+            out.append(
+                f"<p>Taken in full, that step would have raised Σr<sub>i</sub>² from {big(it.cost)} to {full_cost} m². "
+                f"Damping halved it {n} time{'s' if n != 1 else ''}: the step taken is Δ/{2**n} = ({num(sx)} m, "
+                f"{num(sy)} m, {millis(st)}), the first fraction that lowers Σr<sub>i</sub>².</p>"
+            )
         nx, ny, nt = nxt.estimate
         out.append(f'<p class="eq">new guess: ({num(nx)}, {num(ny)}, {seconds(nt)})</p>')
         out.append(f'<p class="eq">Σr<sub>i</sub>²: {big(it.cost)} → {big(nxt.cost)} m²</p>')
@@ -236,8 +281,9 @@ class GaussNewtonMode(Mode):
             out.append(
                 '<p class="note">Numerically the app doesn\'t form JᵀJ: it solves the equivalent least-squares problem '
                 "J·Δ ≈ −r directly, with t<sub>0</sub> measured as c·t<sub>0</sub> meters so all three columns are the "
-                "same size. Forming JᵀJ squares J's condition number, and far outside the array (nearly parallel "
-                "u<sub>i</sub>) that turns a nearly singular problem into an exactly singular one.</p>"
+                "same size. Forming JᵀJ squares J's condition number (how much the solution amplifies small errors in "
+                "the data; huge means nearly singular, with no unique solution), and far outside the array (nearly "
+                "parallel u<sub>i</sub>) that turns a nearly singular problem into an exactly singular one.</p>"
             )
         out.append('<p class="note">On the field, the arrow is this step.</p>')
         return "\n".join(out)
@@ -254,6 +300,10 @@ class GaussNewtonMode(Mode):
             out.append(f"<tr><td nowrap>{it.k}</td><td nowrap>{big(x)}</td><td nowrap>{big(y)}</td>"
                        f"<td nowrap>{num(t0, 6)}</td><td nowrap>{big(it.cost, 4) if it.cost >= 1e-4 else f'{it.cost:.1e}'}</td></tr>")
         out.append("</table>")
+        if self.damped:
+            shortened = sum(1 for it in gn.iterations[:-1] if it.step_scale < 1)
+            out.append(f"<p>Damping shortened {shortened} of the {self.n_iterations} steps.</p>" if shortened else
+                       "<p>Damping never had to shorten a step: every full step lowered Σr².</p>")
 
         if gn.converged:
             error = float(np.linalg.norm(final.estimate[:2] - snap.shot))
@@ -269,13 +319,21 @@ class GaussNewtonMode(Mode):
                     "times exactly: the other solution of an ambiguous layout. Gauss-Newton finds whichever solution is "
                     "downhill from where it starts. Drag the diamond to find the other one.</p>"
                 )
+        elif gn.status == "diverged" and self.damped:
+            out.append(
+                "<p>Even damped, it ran off. Damping only refuses steps that make Σr² larger, and from this start Σr² "
+                "keeps falling, slowly, as the estimate heads for a plateau far away: out there the unit vectors "
+                "u<sub>i</sub> are nearly parallel, t<sub>0</sub> absorbs most of any residual, and the straight-line "
+                "model keeps promising a slightly better fit a little further out. A real system starts from the closed "
+                "form instead, and rejects a fix that lands far outside the array. Drag the diamond closer to the sensors.</p>"
+            )
         elif gn.status == "diverged":
             out.append(
                 "<p>Far from the sensors the straight-line approximation is poor: the unit vectors u<sub>i</sub> from all "
                 "the sensors point almost the same way, JᵀJ is nearly singular, and the step overshoots wildly. Plain "
-                "Gauss-Newton has no safeguard against that (damped versions, such as Levenberg-Marquardt, shrink such "
-                "steps). Drag the diamond closer to the sensors.</p>"
+                "Gauss-Newton has no safeguard against that. Drag the diamond closer to the sensors, or turn on "
+                "<i>Damped</i> under the field to add the simplest safeguard.</p>"
             )
-        elif gn.status in ("singular", "hit_sensor"):
+        elif gn.status in ("singular", "hit_sensor", "stalled"):
             out.append('<p class="note">Drag the diamond somewhere else.</p>')
         return "\n".join(out)

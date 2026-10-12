@@ -17,13 +17,15 @@ Steps and their geometry on the field:
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
 from matplotlib.ticker import FuncFormatter, LogLocator, NullLocator
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
 
 from ...core.accuracy import Fix
@@ -43,6 +45,8 @@ SHARP = 0.2  # a dip is "sharp" if moving FLANK away raises the miss by this fra
 RMS_FLOOR = 1e-3  # m: the plot's log scale bottoms out at 1 mm
 MEETS = 1e-3  # m: an RMS mismatch below this counts as "the circles meet"
 SWEEP_INTERVAL = 0.2  # s: while a sensor is being dragged, redo the sweep at most this often
+PLAY_SECONDS = 8.0  # how long Play takes to carry the guess across the plot
+PLAY_FRAME_MS = 40  # how often Play moves the guess (each move redraws; the clock, not the frame count, sets the pace)
 
 
 class SweepMode(Mode):
@@ -201,7 +205,7 @@ class SweepMode(Mode):
         out.append(
             f'<p class="note">The guess can\'t be later than the first arrival ({seconds(snap.times[first])}, at '
             f"{snap.labels[first]}), or that sensor would have heard the shot before it was fired; the slider ends there. "
-            "Drag it, or click the plot under the field: the circles grow and shrink together.</p>"
+            "Drag it, click the plot under the field, or press <i>Play</i>: the circles grow and shrink together.</p>"
         )
         return "\n".join(out)
 
@@ -230,7 +234,7 @@ class SweepMode(Mode):
             ))
         out.append(
             f'<p class="eq">Σ misses² = {big(pt.cost)} m²,&nbsp; RMS = √(Σ / {snap.n}) = {length(pt.rms)}</p>'
-            '<p class="note">The RMS is the size of a typical miss. On the field, each short colored segment is one '
+            '<p class="note">The RMS (root mean square) is the size of a typical miss. On the field, each short colored segment is one '
             "circle's miss, from p* to the circle; p* is drawn as the estimate (circle and plus).</p>"
         )
         return "\n".join(out)
@@ -354,6 +358,11 @@ class SweepView(QWidget):
         self.jump = QPushButton("Jump to best dip")
         self.jump.setToolTip("Set the guess to the t₀ where the circles come closest to meeting (the lowest dip of the plot)")
         row.addWidget(self.jump)
+        self.play = QPushButton("Play")
+        self.play.setCheckable(True)
+        self.play.setToolTip(f"Carry the guess across the plot over {PLAY_SECONDS:.0f} s: the circles grow and shrink "
+                             "together and the best point rides its track. Touching the slider or the plot stops it.")
+        row.addWidget(self.play)
 
         self.figure = Figure(figsize=(6, 1.6))
         self.canvas = FigureCanvasQTAgg(self.figure)
@@ -376,14 +385,58 @@ class SweepView(QWidget):
         self.canvas.mpl_connect("button_release_event", lambda e: setattr(self, "_pressed", False))
         self.canvas.mpl_connect("scroll_event", self._on_scroll)
 
+        # Play: the guess follows a clock from one end of the (visible) range to the other.
+        self._now = time.monotonic  # injectable, so tests can control time
+        self._play_timer = QTimer(self)
+        self._play_timer.setInterval(PLAY_FRAME_MS)
+        self._play_timer.timeout.connect(self._play_tick)
+        self._play_started = 0.0
+        self._play_range = (0.0, 1.0)
+        self.play.toggled.connect(self._on_play_toggled)
+        for stop in (self.slider.sliderPressed, self.spin.valueChanged, self.jump.clicked):
+            stop.connect(self.stop_playing)
+
+    # ---- play ---------------------------------------------------------------
+
+    def _on_play_toggled(self, on: bool) -> None:
+        if not on:
+            self._play_timer.stop()
+            return
+        if self.mode.point is None:
+            self.play.setChecked(False)
+            return
+        lo, hi = self.mode.t0_range
+        if self._xlim is not None:  # zoomed in: sweep what is visible
+            lo, hi = max(self._xlim[0], lo), min(self._xlim[1], hi)
+        self._play_range = (lo, hi)
+        self._play_started = self._now()
+        self._play_timer.start()
+        self._play_tick()
+
+    def stop_playing(self) -> None:
+        if self.play.isChecked():
+            self.play.setChecked(False)
+
+    def _play_tick(self) -> None:
+        lo, hi = self._play_range
+        fraction = (self._now() - self._play_started) / PLAY_SECONDS
+        if fraction >= 1.0:
+            self.mode.set_guess(hi)
+            self.play.setChecked(False)
+            return
+        self.mode.set_guess(lo + fraction * (hi - lo))
+
     # ---- showing the mode's state ----------------------------------------
 
     def show_state(self, mode: SweepMode, snap: Snapshot) -> None:
         ready = mode.point is not None
-        for w in (self.slider, self.spin, self.jump):
+        for w in (self.slider, self.spin, self.jump, self.play):
             w.setEnabled(ready)
+        if not ready:
+            self.stop_playing()
         if snap.scenario is not self._scenario:
             self._scenario, self._xlim = snap.scenario, None
+            self.stop_playing()
         if ready:
             lo, hi = mode.t0_range
             self._lo = lo
@@ -448,6 +501,7 @@ class SweepView(QWidget):
 
     def _on_press(self, event) -> None:
         if event.button == 1:
+            self.stop_playing()
             if event.dblclick:  # double-click: back to the full range
                 self._xlim = None
                 self.mode.changed.emit()

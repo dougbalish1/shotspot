@@ -20,8 +20,15 @@ Minimizing Σ(rᵢ + Jᵢ·Δ)² gives the normal equations
 
 Solve for Δ, step x ← x + Δ, and repeat. Near the answer this converges
 very fast. From a bad starting guess it can wander off, or settle on the
-*other* solution in a 3-sensor ambiguous geometry. This is plain, undamped
-Gauss-Newton, so both behaviors are visible.
+*other* solution in a 3-sensor ambiguous geometry. By default this is plain,
+undamped Gauss-Newton, so both behaviors are visible.
+
+With `damped=True` a step that would make Σrᵢ² larger is halved, and halved
+again, until it doesn't (a simple line search). That rescues many far starts,
+but not all: from some, Σrᵢ² keeps falling slowly toward a plateau far away,
+where the unit vectors are nearly parallel and t₀ absorbs most of the
+residual, so damping follows it off the field. Levenberg-Marquardt is the
+usual, smarter safeguard, with the same intent.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ import numpy as np
 from .geometry import ON_SENSOR, distances, unit_vectors
 
 DIVERGED = 1e6  # m; an estimate 1000 km away has clearly run off
+MAX_HALVINGS = 30  # damped: give up on a step after halving it this many times without lowering Σr²
 
 
 @dataclass
@@ -44,7 +52,9 @@ class GNIteration:
     jacobian: np.ndarray  # (N, 3), rows [uᵢₓ, uᵢᵧ, c]
     normal_matrix: np.ndarray  # JᵀJ
     gradient: np.ndarray  # Jᵀr
-    step: np.ndarray | None = None  # Δ from (JᵀJ)Δ = −Jᵀr; None on the last record
+    step: np.ndarray | None = None  # Δ actually taken from here (shortened if damped); None on the last record
+    step_scale: float = 1.0  # fraction of the full Gauss-Newton step that was taken: 2⁻ⁿ after n halvings
+    full_step_cost: float | None = None  # damped: the Σr² the full step would have given, when it was shortened
 
     @property
     def cost(self) -> float:
@@ -54,7 +64,7 @@ class GNIteration:
 @dataclass
 class GNResult:
     iterations: list[GNIteration]  # iterations[0] is the starting guess
-    status: str  # "converged", "max_iterations", "singular", "hit_sensor", "diverged" or "too_few_sensors"
+    status: str  # "converged", "max_iterations", "singular", "hit_sensor", "diverged", "stalled" or "too_few_sensors"
 
     @property
     def converged(self) -> bool:
@@ -107,11 +117,14 @@ def gauss_newton(
     t0_init: float | None = None,
     max_iter: int = 50,
     tol: float = 1e-6,
+    damped: bool = False,
 ) -> GNResult:
     """Run Gauss-Newton from p_init, recording every iteration.
 
     Stops when a step moves the estimate less than `tol` meters (with t₀
-    measured as c·t₀ meters too).
+    measured as c·t₀ meters too). With `damped`, a step that would raise Σr²
+    is halved until it doesn't (see the module docstring); "stalled" means
+    no fraction of the step helped.
     """
     sensors = np.asarray(sensors, float)
     times = np.asarray(times, float)
@@ -138,9 +151,22 @@ def gauss_newton(
         # turns "ill-conditioned" into "exactly singular".
         scale = np.array([1.0, 1.0, c])  # solve for c·t₀ (meters) so all columns are O(1)
         scaled_step, *_ = np.linalg.lstsq(it.jacobian / scale, -it.residuals, rcond=None)
-        it.step = scaled_step / scale
-        x = it.estimate + it.step
-        it = _evaluate(k, x, sensors, times, c)
+        full_step = scaled_step / scale
+        it.step = full_step
+        nxt = _evaluate(k, it.estimate + full_step, sensors, times, c)
+        if damped:
+            full_cost, halvings = nxt.cost, 0
+            while not nxt.cost <= it.cost and halvings < MAX_HALVINGS:  # "not <=" also catches NaN
+                halvings += 1
+                it.step = full_step / 2**halvings
+                nxt = _evaluate(k, it.estimate + it.step, sensors, times, c)
+            if halvings:
+                it.step_scale, it.full_step_cost = 0.5**halvings, full_cost
+            if not nxt.cost <= it.cost:
+                status = "stalled"
+                break
+        it = nxt
+        x = it.estimate
         iterations.append(it)
         if not np.all(np.isfinite(x)) or np.linalg.norm(x[:2]) > DIVERGED:
             status = "diverged"

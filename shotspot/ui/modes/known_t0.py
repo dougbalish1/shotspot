@@ -212,7 +212,8 @@ class KnownT0Mode(Mode):
         out = [
             "<h3>Step 3. Subtract to cancel x² + y²</h3>",
             f"<p>Subtract the reference {ref}'s equation from each of the others. The x² + y² cancels, "
-            "and what's left is linear in x and y:</p>",
+            "and what's left is <i>linear</i> in x and y (no squares or products of the unknowns, so each "
+            "equation is a straight line):</p>",
             f'<p class="eq">2(x<sub>i</sub> − x<sub>{kk}</sub>)·x + 2(y<sub>i</sub> − y<sub>{kk}</sub>)·y = '
             f"(|s<sub>i</sub>|² − |s<sub>{kk}</sub>|²) − (r<sub>i</sub>² − r<sub>{kk}</sub>²)</p>",
         ]
@@ -259,7 +260,10 @@ class KnownT0Mode(Mode):
             out.append("<p>Here:</p>")
         out.append(f'<p class="eq">{linear(M[0, 0], M[0, 1], v[0])}<br>{linear(M[1, 0], M[1, 1], v[1])}</p>')
 
-        out.append("<p>Cramer's rule solves it:</p>")
+        out.append(
+            "<p>Cramer's rule solves it (the textbook formula for two equations in two unknowns: each unknown is a "
+            "ratio of two determinants, det being the system's own):</p>"
+        )
         out.append(
             '<p class="eq">det = m<sub>11</sub>m<sub>22</sub> − m<sub>12</sub>m<sub>21</sub> = '
             f"{term(M[0, 0])} × {term(M[1, 1])} − {term(M[0, 1])} × {term(M[1, 0])} = {big(det)}</p>"

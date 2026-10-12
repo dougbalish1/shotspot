@@ -52,15 +52,16 @@ writes its derivation, with the numbers filled in, on the Method tab. Step throu
   at the shot. The steps show the algebra (subtracting circle equations leaves straight lines), and then
   why this can't be done for real.
 - **t₀ sweep**: guess t₀ with the slider under the field (or click the plot). Each guess gives circles; the
-  plot shows how badly they miss each other for every guess, and drops to zero only where they meet. Scroll
-  the plot to zoom it, double-click to zoom back out.
+  plot shows how badly they miss each other for every guess, and drops to zero only where they meet. *Play*
+  carries the guess across the plot by itself. Scroll the plot to zoom it, double-click to zoom back out.
 - **TDOA hyperbolas**: subtract arrival times and t₀ cancels. Each pair of sensors gives one hyperbola
   branch, and the branches cross at the shot. Toggle *All pairs* and *Asymptotes* in the control strip.
 - **Closed form**: square, subtract, solve. With 3 sensors the algebra ends in a quadratic in t₀, whose two
   roots are the two-solution ambiguity; with 4+ it is a plain linear solve. The steps follow whichever
   route the solver takes.
 - **Gauss-Newton**: drag the diamond to set the starting guess, then step through the iterations. From
-  inside the array it converges in a few steps; from far outside, plain Gauss-Newton runs away.
+  inside the array it converges in a few steps; from far outside, plain Gauss-Newton runs away. *Damped*
+  halves any step that would make things worse, the simplest of the safeguards real solvers use.
 - **Accuracy / GDOP**: the field is colored by the error a shot would have at each point, for the current
   timing noise. The ellipse at the shot shows the shape of the error; *Run trials* under the field fires
   hundreds of noisy shots to check the prediction.

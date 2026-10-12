@@ -39,6 +39,8 @@ Pause after each mode so the user can review it, unless they say to keep going.
   `mode.step` after `update`. `ui/modes/known_t0.py` is the pattern: a `STEPS` list, `roadmap()` at the top of
   the Method page, one builder per step, and per-sensor rows anchored and washed via `_sensor_block`.
   Set `t0_is_given` for a mode that doesn't estimate t₀.
+- The sweep's Play button and the GDOP map's throttle keep their own QTimers; Play follows a clock (`_now`,
+  injectable for tests), so the sweep takes the same time whatever the frame rate.
 - `FieldCanvas` has a single axes. A mode that needs another plot gives it its own canvas via `view()`
   (shown between the field and the control strip), as the sweep's residual-vs-t₀ plot does. Extra legend
   entries come from `legend_handles()`.
@@ -75,6 +77,9 @@ Pause after each mode so the user can review it, unless they say to keep going.
   squares the conditioning and turns near-singular into singular. It is undamped on purpose: it diverges
   from starts well outside the array (realistic, and a teaching point). The initial t₀ doesn't affect the
   path, because the residual is linear in t₀.
+  `damped=True` (the mode's Damped checkbox) halves a step until Σr² falls; it rescues most far starts but
+  from some the cost keeps falling toward the plateau at infinity, so it still "diverges". That is real,
+  and the Result page says so.
 - **Covariance:** computed via the SVD of the scaled J. Position error = `dilution(geometry)` × cσ.
 - **Sweep speed:** `core/sweep.py` refines all guesses at once (batched Gauss-Newton with per-row step halving,
   rows dropping out as they converge or settle) and golden-section-refines each dip. ~40 ms for 400 guesses;
