@@ -10,17 +10,19 @@ adds its own geometry to the field:
     2 Circles     the same radii, now centered on the sensors (as in every later step)
     3 Subtract    each differenced equation is a straight line, drawn dashed
     4 Solve       the lines again: the estimate is where they cross
-    5 Check       the catch: rerunning with a t₀ that is 10 ms off
+    5 Check       the catch: rerunning with a t₀ that is 10 ms late, drawn as the shrunken
+                  circles (dashed) and the point they lead to (✕)
 """
 
 from __future__ import annotations
 
 import numpy as np
+from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
 
 from ...core.accuracy import Fix
 from ...core.known_t0 import CircleFit, solve_known_t0
-from ..fmt import big, index_of, linear, meters, millis, num, plus, point, seconds, sub, swatch, term, wash
+from ..fmt import big, index_of, length, linear, meters, millis, num, plus, point, seconds, sub, swatch, term, wash
 from ..snapshot import Snapshot
 from .base import Mode, roadmap
 
@@ -93,6 +95,29 @@ class KnownT0Mode(Mode):
                 ax.axline(on_line, on_line + along, color=snap.colors[eq.sensor], linewidth=width,
                           linestyle=(0, (6, 4)), zorder=2.5)
 
+        wrong = self.wrong_t0
+        if step == CHECK and wrong is not None:
+            # The same method with t₀ late: every circle shrinks by c·T0_ERROR, and the lines lead somewhere else.
+            for i, (sensor, r) in enumerate(zip(snap.positions, wrong.radii)):
+                if r > 0:
+                    ax.add_patch(Circle(sensor, r, fill=False, edgecolor=snap.colors[i], linewidth=1.2,
+                                        linestyle=(0, (3, 3)), alpha=0.75, zorder=2.8))
+            if wrong.position is not None and fit.position is not None:
+                p, q = fit.position, wrong.position
+                ax.plot([p[0], q[0]], [p[1], q[1]], color=snap.theme.ink_secondary, linewidth=1.0, zorder=11)
+                ax.scatter(*q, marker="x", s=90, color=snap.theme.ink_secondary, linewidths=2.0, zorder=13)
+
+    def legend_handles(self, snap: Snapshot) -> list:
+        if not snap.ready or self.step != CHECK or self.wrong_t0 is None:
+            return []
+        t = snap.theme
+        return [
+            Line2D([], [], color=t.ink_secondary, linestyle=(0, (3, 3)), linewidth=1.2,
+                   label=f"circles for t₀ {T0_ERROR * 1e3:.0f} ms late"),
+            Line2D([], [], marker="x", color=t.ink_secondary, linestyle="none", markersize=8, markeredgewidth=2,
+                   label="their best point p′"),
+        ]
+
     # ---- Method tab --------------------------------------------------------
 
     def method_html(self, snap: Snapshot) -> str:
@@ -110,10 +135,11 @@ class KnownT0Mode(Mode):
         out.append(builders[self.step](snap))
         return "\n".join(out)
 
-    def _sensor_block(self, snap: Snapshot, i: int, lines: list[str]) -> str:
-        """One sensor's lines in a step, anchored so selecting the sensor scrolls here, and washed if selected."""
+    def _sensor_block(self, snap: Snapshot, i: int, lines: list[str], anchor: bool = True) -> str:
+        """One sensor's lines in a step, anchored so selecting the sensor scrolls here, and washed if selected.
+        A step's second set of per-sensor rows passes anchor=False, so each anchor name appears once per page."""
         label = snap.labels[i]
-        first = f'<a name="sensor-{label}"></a>{swatch(snap.colors[i])}&nbsp;{lines[0]}'
+        first = (f'<a name="sensor-{label}"></a>' if anchor else "") + f"{swatch(snap.colors[i])}&nbsp;{lines[0]}"
         html = "\n".join(f'<p class="eq">{line}</p>' for line in [first, *lines[1:]])
         return wash(html, snap.theme.selected_wash) if i == snap.selected else html
 
@@ -292,25 +318,65 @@ class KnownT0Mode(Mode):
             "with each other (by GPS, in real systems), so the differences between their arrival times can be "
             "trusted, but the gun isn't on that clock.</p>"
         )
-        catch = (
-            f"<p>And t<sub>0</sub> matters. Every millisecond of error in t<sub>0</sub> changes every radius by "
-            f"c × 1 ms = {meters(snap.c * 1e-3)}, all in the same direction. Run the same method with "
-            f"t<sub>0</sub> {num(T0_ERROR * 1e3, 0)} ms late ({seconds(sc.t0 + T0_ERROR)}): every radius shrinks "
-            f"by {meters(snap.c * T0_ERROR)}, so the circles no longer meet at one point"
-        )
-        wrong = self.wrong_t0
-        if wrong is not None and wrong.position is not None:
-            miss = float(np.linalg.norm(wrong.position - snap.shot))
-            worst = float(np.max(np.abs(wrong.mismatch)))
-            catch += (
-                f". The method's best point misses the circles by up to {meters(worst)}, and lands "
-                f"{meters(miss)} from the shot."
-            )
-        out.append(catch + "</p>")
+        out.append(self._wrong_t0_html(snap))
         out.append(
-            "<p>How far the point moves depends on the layout. What always happens is that the circles stop "
-            "meeting, and that is the clue the next mode uses.</p>"
+            "<p>Whatever the layout, the circles stop meeting, and that is the clue the next mode uses.</p>"
             '<p class="note">t<sub>0</sub> sweep turns the problem around: guess t<sub>0</sub>, measure how badly '
             "the circles fail to meet, and keep the guess where they meet.</p>"
+        )
+        return "\n".join(out)
+
+    def _wrong_t0_html(self, snap: Snapshot) -> str:
+        """The same four steps with t₀ late by T0_ERROR: what happens, and why the point moves as far as it does."""
+        fit, sc, c = self.result, snap.scenario, snap.c
+        wrong = self.wrong_t0
+        delta = c * T0_ERROR
+        ms = num(T0_ERROR * 1e3, 0)
+        intro = (
+            f"<p>And t<sub>0</sub> matters. Every millisecond of error in t<sub>0</sub> changes every radius by "
+            f"c × 1 ms = {meters(c * 1e-3)}, all in the same direction. So run the same four steps with "
+            f"t<sub>0</sub> {ms} ms late ({seconds(sc.t0 + T0_ERROR)}): every radius shrinks by δ = c × {ms} ms = "
+            f"{meters(delta)}, and the circles no longer meet"
+        )
+        if wrong is None or wrong.position is None or fit.position is None:
+            return intro + ".</p>"
+        out = [intro + f". Steps 3 and 4 now give p′ = {point(wrong.position)}. Put it back into the shrunken circles:</p>"]
+        for i, label in enumerate(snap.labels):
+            d = wrong.radii[i] + wrong.mismatch[i]
+            out.append(self._sensor_block(snap, i, [
+                f"|p′ − {sub('s', label)}| = {meters(d)},&nbsp; {sub('r', label)} − δ = {meters(wrong.radii[i])},"
+                f"&nbsp; off by {meters(wrong.mismatch[i], 3)}"
+            ], anchor=False))
+        worst = float(np.max(np.abs(wrong.mismatch)))
+        moved = float(np.linalg.norm(wrong.position - fit.position))
+        out.append(f"<p>The circles miss p′ by up to {meters(worst)}, and p′ is {length(moved)} from p<sub>est</sub>.</p>")
+
+        k = snap.reference
+        kk = index_of(snap.labels[k])
+        out.append(
+            "<p>Step 3's lines say why. Line i has r<sub>i</sub>² − r<sub>k</sub>² on its right-hand side, and shrinking "
+            "both radii by δ turns that into (r<sub>i</sub> − δ)² − (r<sub>k</sub> − δ)² = r<sub>i</sub>² − r<sub>k</sub>² "
+            "− 2δ(r<sub>i</sub> − r<sub>k</sub>). The line keeps its direction and slides sideways by that change divided "
+            "by the length of its coefficients, 2|s<sub>i</sub> − s<sub>k</sub>|:</p>"
+            f'<p class="eq">shift = δ·|r<sub>i</sub> − r<sub>{kk}</sub>| / |s<sub>i</sub> − s<sub>{kk}</sub>|</p>'
+            f"<p>And r<sub>i</sub> − r<sub>{kk}</sub> = c·(t<sub>i</sub> − t<sub>{kk}</sub>) is the range difference "
+            "from the Per-sensor table, which doesn't depend on t<sub>0</sub> at all. Here:</p>"
+        )
+        for eq in fit.equations:
+            i = eq.sensor
+            range_diff = abs(float(fit.radii[i] - fit.radii[k]))
+            baseline = float(np.linalg.norm(snap.positions[i] - snap.positions[k]))
+            shift = delta * range_diff / baseline if baseline > 0 else float("nan")
+            out.append(self._sensor_block(snap, i, [
+                f"{snap.labels[i]}: {num(delta)} × {num(range_diff)} / {num(baseline)} = {length(shift)}"
+            ], anchor=False))
+        out.append(
+            "<p>So a line hardly moves when its two sensors heard the shot at nearly the same time, and swings when "
+            "one heard it long before the other; the crossing follows the lines. That is why a shot amid the sensors "
+            "barely moves while the circles miss it by almost the whole δ, and a shot off to one side slides a long "
+            "way. Either way p′ moves along one fixed straight line as the assumed t<sub>0</sub> changes, "
+            f"{length(moved / T0_ERROR * 1e-3)} per millisecond here. The Closed form mode (step 3) derives that line, "
+            "p = u + v·t<sub>0</sub>, and uses it to find the real t<sub>0</sub>.</p>"
+            '<p class="note">On the field: the dashed circles are the shrunken ones, and ✕ is p′.</p>'
         )
         return "\n".join(out)

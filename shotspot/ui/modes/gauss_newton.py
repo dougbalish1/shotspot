@@ -222,6 +222,10 @@ class GaussNewtonMode(Mode):
             "JᵀJ·Δ = −Jᵀr:</p>"
         )
         out.append(f"<p>JᵀJ =</p>{matrix(it.normal_matrix)}")
+        out.append(
+            f'<p class="note">The big entry is Σc² = {snap.n}·c² = {big(snap.n * c * c)}, because every row ends in c: '
+            "the t<sub>0</sub> column is in seconds while x and y are in meters.</p>"
+        )
         out.append(f'<p class="eq">−Jᵀr = {vector(-it.gradient)}</p>')
         dx, dy, dt = it.step
         out.append(f'<p class="eq"><b>Δ = ({num(dx)} m, {num(dy)} m, {millis(dt)})</b></p>')

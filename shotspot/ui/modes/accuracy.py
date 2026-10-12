@@ -16,6 +16,8 @@ ellipses are far smaller than a pixel of the field).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.cm import ScalarMappable
@@ -32,10 +34,10 @@ from ...core.accuracy import (
     monte_carlo,
 )
 from ...core.geometry import convex_hull, ellipse_points, error_ellipse
-from ..fmt import length, matrix, millis, num, sub, swatch, wash
+from ..fmt import length, matrix, millis, num, point, sub, swatch, wash
 from ..snapshot import Snapshot
 from ..style import Theme
-from .base import Mode, Throttle, roadmap
+from .base import Mode, Throttle, draw_solution_square, roadmap, solution_square_handle
 
 STEPS = ["Noise to error", "The map", "Error ellipse", "Monte Carlo"]
 NOISE, MAP, ELLIPSE, TRIALS = range(len(STEPS))
@@ -61,6 +63,17 @@ def _contour_levels(norm: LogNorm) -> list[float]:
     return [v for v in levels if norm.vmin * 1.5 < v < norm.vmax]
 
 
+@dataclass
+class Cluster:
+    """Where the Monte Carlo fixes gather, and the predicted covariance there. Normally the shot; in an ambiguous
+    layout the solvers keep landing on the other solution, and the prediction has to be made there to be comparable."""
+
+    center: np.ndarray
+    cov: np.ndarray  # 2×2 position covariance predicted at the center
+    name: str  # "the shot" or "the other solution"
+    share_other: float  # fraction of the fixes nearer the other solution than the shot (0 when there is none)
+
+
 class AccuracyMode(Mode):
     title = "Accuracy / GDOP"
     summary = (
@@ -74,6 +87,9 @@ class AccuracyMode(Mode):
         super().__init__()
         self.sigma = FALLBACK_SIGMA
         self.cov: np.ndarray | None = None  # 3×3 covariance of (x, y, t₀) at the shot
+        self.other: np.ndarray | None = None  # the second solution of an ambiguous layout, where the solvers may land
+        self.other_cov: np.ndarray | None = None  # the covariance there
+        self.cluster: Cluster | None = None
         self.mc: MonteCarloResult | None = None
         self._mc_key = None
         self._key = None
@@ -99,14 +115,30 @@ class AccuracyMode(Mode):
         super().update(snap)  # the estimate: closed form polished by Gauss-Newton
         self._snap = snap
         self.sigma = snap.scenario.sigma if snap.scenario.sigma > 0 else FALLBACK_SIGMA
-        self.cov = None
+        self.cov = self.other = self.other_cov = self.cluster = None
         if snap.ready:
             self.cov = covariance(snap.shot, snap.positions, snap.c, self.sigma)
             self._key = (snap.positions.tobytes(), snap.shot.tobytes(), snap.c, self.sigma, snap.reference)
             if self._key != self._mc_key:
                 self.mc = None  # the trials belonged to a different scenario
+            if snap.ambiguous:
+                self.other = snap.other_solution(snap.shot)
+                self.other_cov = covariance(self.other, snap.positions, snap.c, self.sigma)
+            self.cluster = self._cluster(snap)
         if self._view is not None:
             self._view.show_state(self, snap)
+
+    def _cluster(self, snap: Snapshot) -> Cluster | None:
+        if self.cov is None:
+            return None
+        share = 0.0
+        if self.mc is not None and self.other_cov is not None and len(self.mc.estimates):
+            d_other = np.linalg.norm(self.mc.estimates - self.other, axis=1)
+            d_shot = np.linalg.norm(self.mc.estimates - snap.shot, axis=1)
+            share = float(np.mean(d_other < d_shot))
+        if share > 0.5:
+            return Cluster(self.other, self.other_cov[:2, :2], "the other solution", share)
+        return Cluster(snap.shot, self.position_cov, "the shot", share)
 
     def run_monte_carlo(self, trials: int) -> None:
         snap = self._snap
@@ -133,6 +165,8 @@ class AccuracyMode(Mode):
         if self.mc is not None:
             handles.append(Line2D([], [], marker="o", color=t.ink_secondary, linestyle="none", markersize=3,
                                   alpha=0.6, label="Monte Carlo fixes"))
+        if self.other is not None:
+            handles.append(solution_square_handle(snap))
         return handles
 
     # ---- field -----------------------------------------------------------
@@ -172,14 +206,22 @@ class AccuracyMode(Mode):
             loop = np.vstack([hull, hull[:1]])
             ax.plot(loop[:, 0], loop[:, 1], color=t.ink_secondary, linewidth=1.0, linestyle=(0, (5, 3)), zorder=2.5)
 
+        halo = [patheffects.withStroke(linewidth=3.5, foreground=t.surface)]  # readable over any map color
         if self.cov is not None:
-            halo = [patheffects.withStroke(linewidth=3.5, foreground=t.surface)]  # readable over any map color
-            for n_sigma, style, width in ((1.0, "solid", 1.6), (SIGMA_95, (0, (4, 2)), 1.2)):
-                pts = ellipse_points(snap.shot, self.position_cov, n_sigma)
-                ax.plot(pts[:, 0], pts[:, 1], color=t.ink, linewidth=width, linestyle=style, zorder=12, path_effects=halo)
+            self._draw_ellipses(ax, snap, snap.shot, self.position_cov, halo)
+        if self.other is not None:  # the solvers may land here instead, so predict the error here too
+            draw_solution_square(ax, snap, self.other)
+            if self.other_cov is not None:
+                self._draw_ellipses(ax, snap, self.other, self.other_cov[:2, :2], halo)
         if self.mc is not None and len(self.mc.estimates):
             ax.scatter(self.mc.estimates[:, 0], self.mc.estimates[:, 1], s=5, color=t.ink_secondary, alpha=0.5,
                        linewidths=0, zorder=9)
+
+    @staticmethod
+    def _draw_ellipses(ax, snap: Snapshot, center: np.ndarray, cov: np.ndarray, halo) -> None:
+        for n_sigma, style, width in ((1.0, "solid", 1.6), (SIGMA_95, (0, (4, 2)), 1.2)):
+            pts = ellipse_points(center, cov, n_sigma)
+            ax.plot(pts[:, 0], pts[:, 1], color=snap.theme.ink, linewidth=width, linestyle=style, zorder=12, path_effects=halo)
 
     # ---- Method tab --------------------------------------------------------
 
@@ -235,8 +277,10 @@ class AccuracyMode(Mode):
             "<p>Measure t<sub>0</sub> in meters (b = c·t<sub>0</sub>) and J's rows become [u<sub>ix</sub>, u<sub>iy</sub>, 1], "
             "with no c or σ in them. So</p>"
             '<p class="eq"><b>position error = (geometry factor) × c·σ</b></p>'
-            "<p>The geometry factor (the GDOP) depends only on where the shot is relative to the sensors. The layout "
-            "decides the multiplier; the timing noise sets the scale.</p>"
+            "<p>The geometry factor is a <i>dilution of precision</i> (DOP): how many meters of position error each meter "
+            "of range error becomes. It depends only on where the shot is relative to the sensors. The layout decides the "
+            "multiplier; the timing noise sets the scale. (This factor leaves the t<sub>0</sub> term out, so in GPS "
+            "vocabulary it is the horizontal DOP, HDOP; the GDOP proper also counts the clock error.)</p>"
         )
         if self.cov is not None:
             factor = drms(self.position_cov) / self.c_sigma
@@ -287,6 +331,14 @@ class AccuracyMode(Mode):
             f"two dimensions (not 68% as in one). Dashed: {num(SIGMA_95, 2)}σ, which holds 95%. Both are drawn at true size "
             "on the field (zoom in with the scroll wheel) and magnified under it.</p>"
         )
+        if self.other_cov is not None:
+            o_major, o_minor, _ = error_ellipse(self.other_cov[:2, :2])
+            out.append(
+                f'<p class="note">This layout has a second solution at {point(self.other)} (the square on the field), and '
+                "the solvers land there rather than on the shot. Its ellipse is drawn too, from the covariance at that "
+                f"point: semi-axes {length(o_major)} and {length(o_minor)}. The geometry differs, so the predicted error "
+                "differs.</p>"
+            )
         return "\n".join(out)
 
     def _trials(self, snap: Snapshot) -> str:
@@ -298,9 +350,21 @@ class AccuracyMode(Mode):
                        "ellipse can be compared with what actually happens.</p>")
             return "\n".join(out)
         n = len(mc.estimates)
+        cluster = self.cluster
         out.append(f"<p>{n} fixes" + (f" ({mc.failures} trials found no fix)" if mc.failures else "") + ":</p>")
-        if self.cov is not None and n > 2:
-            P = self.position_cov
+        if cluster is not None and self.other is not None and n:
+            pct = num(100 * cluster.share_other, 0)
+            if cluster.share_other > 0.5:
+                out.append(
+                    f"<p><b>{pct}% of the fixes landed at the other solution</b>, {point(self.other)}, not at the shot. "
+                    "The solvers keep the root with the later t<sub>0</sub> (the nearer shot), and timing noise doesn't "
+                    "change which root that is. The fixes still scatter the way the covariance predicts, but around "
+                    f"{cluster.name}, so the prediction below is made there:</p>"
+                )
+            else:
+                out.append(f"<p>{pct}% of the fixes landed at the other solution, {point(self.other)}.</p>")
+        if cluster is not None and n > 2:
+            P, center = cluster.cov, cluster.center
             out.append('<table class="data" cellspacing="0"><tr><th></th><th>predicted</th><th>measured</th></tr>')
             rows = [("σ<sub>x</sub>", np.sqrt(P[0, 0]), np.sqrt(mc.covariance[0, 0])),
                     ("σ<sub>y</sub>", np.sqrt(P[1, 1]), np.sqrt(mc.covariance[1, 1])),
@@ -309,12 +373,12 @@ class AccuracyMode(Mode):
                 out.append(f'<tr><td nowrap class="note" style="text-align:left">{name}</td><td nowrap>{length(predicted)}</td>'
                            f"<td nowrap>{length(measured)}</td></tr>")
             for n_sigma, name in ((1.0, "inside 1σ ellipse"), (SIGMA_95, "inside 95% ellipse")):
-                share = fraction_inside(mc.estimates, snap.shot, P, n_sigma)
+                share = fraction_inside(mc.estimates, center, P, n_sigma)
                 out.append(f'<tr><td nowrap class="note" style="text-align:left">{name}</td>'
                            f"<td nowrap>{num(100 * ellipse_probability(n_sigma), 1)}%</td><td nowrap>{num(100 * share, 1)}%</td></tr>")
             out.append("</table>")
-            bias = float(np.linalg.norm(mc.mean - snap.shot))
-            out.append(f"<p>The average fix is {length(bias)} from the shot.</p>")
+            bias = float(np.linalg.norm(mc.mean - center))
+            out.append(f"<p>The average fix is {length(bias)} from {cluster.name}.</p>")
         out.append(
             '<p class="note">The prediction is a straight-line approximation around the answer. It holds while the errors '
             "are small compared with the distances involved. For distant shots or big noise the scatter bends into a "
@@ -331,13 +395,18 @@ class AccuracyView(QWidget):
         self.mode = mode
         row = QHBoxLayout()
         row.setContentsMargins(8, 4, 8, 0)
-        row.addWidget(QLabel("Monte Carlo trials"))
+        trials_label = QLabel("Monte Carlo trials")
+        row.addWidget(trials_label)
         self.trials = QSpinBox()
         self.trials.setRange(50, 5000)
         self.trials.setSingleStep(50)
         self.trials.setValue(500)
+        for w in (trials_label, self.trials):
+            w.setToolTip("How many shots to fire from the same spot, each with fresh random timing noise")
         row.addWidget(self.trials)
         self.run = QPushButton("Run trials")
+        self.run.setToolTip("Fire that many noisy shots, locate each one, and scatter the fixes on the field to compare "
+                            "with the predicted ellipse")
         row.addWidget(self.run)
         self.status = QLabel()
         row.addWidget(self.status, stretch=1)
@@ -383,8 +452,9 @@ class AccuracyView(QWidget):
         if bar_key != self._bar_key:
             self._bar_key = bar_key
             self._draw_colorbar(mode, snap)
-        cov = None if mode.cov is None else mode.position_cov.tobytes()
-        zoom_key = (t.name, cov, id(mode.mc), None if snap.shot is None else snap.shot.tobytes())
+        cluster = mode.cluster
+        zoom_key = (t.name, id(mode.mc)) if cluster is None else (
+            t.name, id(mode.mc), cluster.cov.tobytes(), cluster.center.tobytes(), cluster.name)
         if zoom_key != self._zoom_key:
             self._zoom_key = zoom_key
             self._draw_zoom(mode, snap)
@@ -416,24 +486,28 @@ class AccuracyView(QWidget):
         for spine in ax.spines.values():
             spine.set_color(t.axis)
         ax.tick_params(colors=t.muted, labelsize=7)
-        if mode.cov is None:
+        cluster = mode.cluster
+        if cluster is None:
             ax.set_xticks([])
             ax.set_yticks([])
             ax.text(0.5, 0.5, "the ellipse around the shot\nappears here", transform=ax.transAxes, ha="center",
                     va="center", color=t.muted, fontsize=8)
             self.zoom_canvas.draw_idle()
             return
-        P = mode.position_cov
+        P, center = cluster.cov, cluster.center
         reach = error_ellipse(P, SIGMA_95)[0]
         for n_sigma, style, width in ((1.0, "solid", 1.6), (SIGMA_95, (0, (4, 2)), 1.2)):
             pts = ellipse_points(np.zeros(2), P, n_sigma)
             ax.plot(pts[:, 0], pts[:, 1], color=t.ink, linewidth=width, linestyle=style, zorder=3)
         if mode.mc is not None and len(mode.mc.estimates):
-            d = mode.mc.estimates - snap.shot
+            d = mode.mc.estimates - center
             ax.scatter(d[:, 0], d[:, 1], s=4, color=t.ink_secondary, alpha=0.5, linewidths=0, zorder=2)
-            ax.scatter(*(mode.mc.mean - snap.shot), marker="+", s=60, color=t.ink, linewidths=1.2, zorder=4)
+            ax.scatter(*(mode.mc.mean - center), marker="+", s=60, color=t.ink, linewidths=1.2, zorder=4)
             reach = max(reach, float(np.percentile(np.abs(d), 99)))
-        ax.scatter([0], [0], marker="*", s=90, color=t.ink, edgecolors=t.surface, linewidths=0.8, zorder=5)
+        if cluster.name == "the shot":
+            ax.scatter([0], [0], marker="*", s=90, color=t.ink, edgecolors=t.surface, linewidths=0.8, zorder=5)
+        else:
+            ax.scatter([0], [0], marker="s", s=60, facecolors="none", edgecolors=t.ink, linewidths=1.2, zorder=5)
         lim = 1.25 * reach
         ax.set_xlim(-lim, lim)
         ax.set_ylim(-lim, lim)
@@ -441,7 +515,7 @@ class AccuracyView(QWidget):
         signed = FuncFormatter(lambda v, _pos: _plain_length(v))
         ax.xaxis.set_major_formatter(signed)
         ax.yaxis.set_major_formatter(signed)
-        ax.set_title("around the shot", color=t.muted, fontsize=8, loc="left", pad=3)
+        ax.set_title(f"around {cluster.name}", color=t.muted, fontsize=8, loc="left", pad=3)
         self.zoom_canvas.draw_idle()
 
 

@@ -20,7 +20,8 @@ from matplotlib.lines import Line2D
 
 from ...core.accuracy import Fix
 from ...core.closed_form import ClosedFormResult, solve_closed_form
-from ..fmt import big, index_of, linear, linear_terms, meters, num, plus, point, seconds, sub, swatch, term, wash
+from ...core.gauss_newton import GNResult, gauss_newton
+from ..fmt import big, index_of, length, linear, linear_terms, meters, num, plus, point, seconds, sub, swatch, term, wash
 from ..snapshot import Snapshot
 from .base import Mode, roadmap
 
@@ -47,6 +48,8 @@ class ClosedFormMode(Mode):
     def __init__(self) -> None:
         super().__init__()
         self.result: ClosedFormResult | None = None
+        # Gauss-Newton run from the 4+-sensor linear answer, to show what that answer leaves on the table.
+        self.polished: GNResult | None = None
 
     @property
     def steps(self) -> list[str]:
@@ -58,12 +61,14 @@ class ClosedFormMode(Mode):
         return steps[self.step] if self.step < len(steps) else ""
 
     def update(self, snap: Snapshot) -> None:
-        self.result, self.fix = None, None
+        self.result, self.fix, self.polished = None, None, None
         if not snap.ready:
             return
         self.result = solve_closed_form(snap.positions, snap.times, snap.c, snap.reference)
         if self.result.position is not None:
             self.fix = Fix(self.result.position, self.result.t0, "closed_form")
+            if self.result.method == "least_squares":
+                self.polished = gauss_newton(snap.positions, snap.times, snap.c, self.result.position, self.result.t0)
 
     def step_count(self, snap: Snapshot) -> int:
         return len(self.steps)
@@ -134,9 +139,9 @@ class ClosedFormMode(Mode):
             "Collinear": "Collinear sensors",
         }[self.step_name]
 
-    def _block(self, snap: Snapshot, i: int, lines: list[str]) -> str:
+    def _block(self, snap: Snapshot, i: int, lines: list[str], anchor: bool = True) -> str:
         label = snap.labels[i]
-        first = f'<a name="sensor-{label}"></a>{swatch(snap.colors[i])}&nbsp;{lines[0]}'
+        first = (f'<a name="sensor-{label}"></a>' if anchor else "") + f"{swatch(snap.colors[i])}&nbsp;{lines[0]}"
         html = "\n".join(f'<p class="eq">{line}</p>' for line in [first, *lines[1:]])
         return wash(html, snap.theme.selected_wash) if i == snap.selected else html
 
@@ -332,6 +337,52 @@ class ClosedFormMode(Mode):
         else:
             out.append(f'<p class="note">{r.message}</p>')
         out.append("<p>No quadratic, so no second root: with 4 or more sensors the ambiguity of three disappears.</p>")
+        out.append(self._polish_html(snap))
+        return "\n".join(out)
+
+    def _polish_html(self, snap: Snapshot) -> str:
+        """What the linear answer leaves out, shown as the range residuals rᵢ there and what Gauss-Newton makes of them."""
+        r, gn, c = self.result, self.polished, snap.c
+        if gn is None:
+            return ""
+        start, final = gn.iterations[0], gn.iterations[-1]
+        kk = index_of(snap.labels[snap.reference])
+        if len(r.equations) == 3:
+            out = [
+                "<p>One equation went unused. Each L<sub>i</sub> is the difference of two range equations, so these three "
+                f"involve all four sensors, but the reference's own equation E<sub>{kk}</sub> was only ever subtracted from "
+                "the others, never solved. With exact arrival times that costs nothing: the answer satisfies all four range "
+                f"equations. With noise the three differences still hold exactly, but a difference can hold while both "
+                "of its equations are off by the same amount, and nothing here pins that amount down. The range residuals "
+                "r<sub>i</sub> = |p − s<sub>i</sub>| − c·(t<sub>i</sub> − t<sub>0</sub>) at this answer show it:</p>"
+            ]
+        else:
+            out = [
+                "<p>Least squares here minimizes the errors of the squared, differenced equations, measured in m², which "
+                "weights the sensors differently from the range residuals r<sub>i</sub> = |p − s<sub>i</sub>| − "
+                "c·(t<sub>i</sub> − t<sub>0</sub>). So with noise it is close to, but not quite, the point that makes "
+                "Σr<sub>i</sub>² smallest. The residuals at this answer:</p>"
+            ]
+        for i, label in enumerate(snap.labels):
+            out.append(self._block(snap, i, [
+                f"{sub('r', label)} = {num(start.distances[i])} − {num(c, 1)} × ({num(snap.times[i], 6)} − "
+                f"{num(start.estimate[2], 6)}) = {meters(start.residuals[i], 3)}"
+            ], anchor=False))
+        if start.cost < 1e-6:
+            out.append(f'<p class="eq">Σr<sub>i</sub>² = {start.cost:.1e} m²: with exact arrival times there is nothing to polish.</p>')
+            return "\n".join(out)
+        out.append(f'<p class="eq">Σr<sub>i</sub>² = {big(start.cost, 3)} m²</p>')
+        n_it = len(gn.iterations) - 1
+        moved = float(np.linalg.norm(final.estimate[:2] - start.estimate[:2]))
+        if gn.converged:
+            out.append(
+                f"<p>Gauss-Newton started from this answer, using all {snap.n} range equations directly, brings that to "
+                f"Σr<sub>i</sub>² = {big(final.cost, 3)} m² in {n_it} iteration{'s' if n_it != 1 else ''}, moving the "
+                f"estimate {length(moved)}. That polish is what the Field view's \"closed form, polished by Gauss-Newton\" "
+                "means, and it is how a real system would use this answer: as the starting point.</p>"
+            )
+        else:
+            out.append(f'<p class="note">Gauss-Newton from this answer did not converge ({gn.status}).</p>')
         return "\n".join(out)
 
     def _rank(self, snap: Snapshot) -> str:

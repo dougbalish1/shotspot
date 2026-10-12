@@ -21,7 +21,7 @@ import numpy as np
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QWidget
 
 from ...core.accuracy import locate
-from ...core.closed_form import Candidate, solve_closed_form
+from ...core.closed_form import Candidate
 from ...core.tdoa import TdoaPair, branch_asymptotes, crossing_angle, hyperbola_function, tdoa_pairs
 from ..fmt import index_of, meters, millis, num, point, seconds, sub, swatch, term, wash
 from ..snapshot import Snapshot
@@ -84,7 +84,7 @@ class HyperbolaMode(Mode):
         if snap.ready:
             self.fix = locate(snap.positions, snap.times, snap.c, k)
             if snap.n == 3:
-                self.candidates = solve_closed_form(snap.positions, snap.times, snap.c, k).valid_candidates
+                self.candidates = snap.candidates
 
     def step_count(self, snap: Snapshot) -> int:
         return len(STEPS) if snap.ready else 0
@@ -303,7 +303,8 @@ class HyperbolaMode(Mode):
             s_i, s_j = snap.positions[pair.i], snap.positions[pair.j]
             asym = branch_asymptotes(s_i, s_j, pair.range_diff)
             if asym is None:
-                return f"{li} − {lj}: no curve"
+                return (f"{li} − {lj}: no curve: |c·Δt| = {meters(abs(pair.range_diff))} is not less than the baseline "
+                        f"{meters(pair.baseline)}, so no point has that difference of distances (step 3)")
             to_shot = shot - asym.center
             axis = s_j - s_i
             actual = np.degrees(np.arccos(np.clip(to_shot @ axis / (np.linalg.norm(to_shot) * np.linalg.norm(axis)), -1, 1)))

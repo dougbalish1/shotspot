@@ -29,6 +29,9 @@ Pause after each mode so the user can review it, unless they say to keep going.
   Jacobians, …). The UI formats those numbers; it never redoes the math.
 - `shotspot/ui/`: `MainWindow` owns the `Scenario`. Every edit calls `request_refresh()` (a coalesced
   0 ms timer), and `refresh()` runs: `Snapshot.take` → `mode.update` → `field.render` → `panel.set_pages`.
+  The snapshot also carries the closed form's physical roots (`snap.candidates`, `snap.ambiguous`,
+  `snap.other_solution(p)`), so the Overview, the Field view and the Accuracy mode can all say "two solutions"
+  instead of quietly reporting the phantom; the base `Mode` draws the other solution as a hollow square.
 - New modes subclass `ui/modes/base.py::Mode` (`update`, `draw`, `method_html`; optionally `controls`,
   `handles`/`move_handle` for draggable points, and `step_count`/`set_step` for Prev/Next) and are added to
   `MODES` in `ui/modes/__init__.py`. The window keeps one instance of each (state survives switching), fills the

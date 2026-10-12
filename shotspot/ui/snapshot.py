@@ -6,10 +6,11 @@ snapshot, so they can never disagree about a number (or a color).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
+from ..core.closed_form import Candidate, solve_closed_form
 from ..core.scenario import Scenario
 from .style import Theme
 
@@ -31,6 +32,10 @@ class Snapshot:
     # While the wavefront animation runs: the simulated time, and how much slower than real time it runs.
     clock: float | None = None
     slowdown: float = 1.0
+    # The closed form's physical roots (0, 1 or 2 of them). Two means a genuine ambiguity: both points
+    # fit every arrival time, and every mode should say so rather than quietly report one of them.
+    candidates: list[Candidate] = field(default_factory=list)
+    ambiguous: bool = False
 
     @classmethod
     def take(cls, scenario: Scenario, selected: int | None, theme: Theme, clock: float | None = None,
@@ -51,7 +56,16 @@ class Snapshot:
             snap.true_times = scenario.true_times()
             snap.times = scenario.measured_times()
             snap.clock, snap.slowdown = clock, slowdown
+        if snap.ready:
+            closed = solve_closed_form(snap.positions, snap.times, snap.c, snap.reference)
+            snap.candidates, snap.ambiguous = closed.valid_candidates, closed.ambiguous
         return snap
+
+    def other_solution(self, position: np.ndarray) -> np.ndarray | None:
+        """In an ambiguous layout, the solution that is *not* the one at `position` (else None)."""
+        if not self.ambiguous:
+            return None
+        return max((c.position for c in self.candidates), key=lambda p: float(np.linalg.norm(p - position)))
 
     @property
     def c(self) -> float:

@@ -17,7 +17,8 @@ layout decides the multiplier, and the timing noise sets the scale. The
 geometry factor is what `dilution` computes. It is small when the unit
 vectors uᵢ point in many different directions (shot inside the array) and
 large when they are nearly parallel (shot far outside, where the hyperbolas
-cross at shallow angles).
+cross at shallow angles). In GPS vocabulary this position-only factor is the
+HDOP (horizontal dilution of precision); GDOP proper includes the clock term.
 """
 
 from __future__ import annotations

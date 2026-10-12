@@ -275,8 +275,9 @@ class SweepMode(Mode):
             )
         if sc.sigma > 0 and snap.n == 3 and meeting:
             out.append(
-                '<p class="note">With exactly 3 sensors there is always a guess where the circles meet, even with '
-                "noise: three equations, three unknowns. The noise moves <i>where</i> they meet, not whether.</p>"
+                '<p class="note">With exactly 3 sensors there is almost always a guess where the circles meet, even with '
+                "noise: three equations, three unknowns. The noise moves <i>where</i> they meet, not whether. (Only "
+                "large noise can leave no exact meeting at all: the closed form's quadratic then has no real root.)</p>"
             )
 
         if self.flanks is not None:
@@ -331,7 +332,8 @@ class SweepView(QWidget):
 
         row = QHBoxLayout()
         row.setContentsMargins(8, 4, 8, 0)
-        row.addWidget(QLabel("Guessed t₀"))
+        guess_label = QLabel("Guessed t₀")
+        row.addWidget(guess_label)
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setSingleStep(1)  # 0.1 ms
         self.slider.setPageStep(100)  # 10 ms
@@ -342,7 +344,15 @@ class SweepView(QWidget):
         self.spin.setSuffix(" s")
         self.spin.setKeyboardTracking(False)
         row.addWidget(self.spin)
+        guess_tip = (
+            "The guessed emission time t₀. Every circle's radius is c·(tᵢ − t₀,guess), so moving the guess grows or\n"
+            "shrinks all the circles together. The range ends at the first arrival time (a later t₀ is impossible)\n"
+            "and reaches back far enough for a shot one field diagonal away. Clicking or dragging on the plot also sets it."
+        )
+        for w in (guess_label, self.slider, self.spin):
+            w.setToolTip(guess_tip)
         self.jump = QPushButton("Jump to best dip")
+        self.jump.setToolTip("Set the guess to the t₀ where the circles come closest to meeting (the lowest dip of the plot)")
         row.addWidget(self.jump)
 
         self.figure = Figure(figsize=(6, 1.6))

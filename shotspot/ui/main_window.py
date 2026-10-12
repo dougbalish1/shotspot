@@ -90,11 +90,16 @@ class MainWindow(QMainWindow):
         for key, factory in PRESETS.items():
             menu.addAction(factory().name, lambda key=key: self.load_preset(key))
         presets.setMenu(menu)
+        presets.setToolTip("Ready-made layouts, each chosen to show one idea (the Overview tab describes it)")
         tb.addWidget(presets)
 
-        tb.addAction("Clear", self.clear_scenario)
-        tb.addAction("Open…", self.open_scenario).setShortcut(QKeySequence.StandardKey.Open)
-        tb.addAction("Save…", self.save_scenario).setShortcut(QKeySequence.StandardKey.Save)
+        tb.addAction("Clear", self.clear_scenario).setToolTip("Remove every sensor and the shot")
+        open_action = tb.addAction("Open…", self.open_scenario)
+        open_action.setShortcut(QKeySequence.StandardKey.Open)
+        open_action.setToolTip("Load a scenario saved as JSON (Ctrl+O)")
+        save_action = tb.addAction("Save…", self.save_scenario)
+        save_action.setShortcut(QKeySequence.StandardKey.Save)
+        save_action.setToolTip("Save the sensors, shot, noise and speed of sound as JSON (Ctrl+S)")
         tb.addSeparator()
 
         self.fire_action = QAction("Fire mode", self)
@@ -102,7 +107,9 @@ class MainWindow(QMainWindow):
         self.fire_action.setShortcut("F")
         self.fire_action.setToolTip("When on, clicking empty space places the shot (F). Shift-click always does.")
         tb.addAction(self.fire_action)
-        tb.addAction("Fit view", lambda: self.field.reset_view()).setShortcut("Home")
+        fit_action = tb.addAction("Fit view", lambda: self.field.reset_view())
+        fit_action.setShortcut("Home")
+        fit_action.setToolTip("Zoom back out to the whole field (Home)")
         self.animate_action = QAction("Animate", self)
         self.animate_action.setCheckable(True)
         self.animate_action.setShortcut("A")
@@ -125,30 +132,55 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(controls)
         row.setContentsMargins(8, 2, 8, 4)
 
-        row.addWidget(QLabel("Timing noise σ"))
+        sigma_label = QLabel("Timing noise σ")
+        row.addWidget(sigma_label)
         self.sigma_slider = QSlider(Qt.Orientation.Horizontal)
         self.sigma_slider.setRange(0, SIGMA_MAX_TICKS)
         self.sigma_slider.setFixedWidth(180)
         self.sigma_label = QLabel()
         self.sigma_label.setMinimumWidth(60)
+        sigma_tip = (
+            "Standard deviation σ of each sensor's timing error, 0 to 10 ms.\n"
+            "Each sensor reports its true arrival time plus σ × its own fixed random draw, so the slider scales\n"
+            "the same errors up and down; Re-roll noise draws new ones. 1 ms of timing error is c × 1 ms ≈ 34 cm of range."
+        )
+        for w in (sigma_label, self.sigma_slider, self.sigma_label):
+            w.setToolTip(sigma_tip)
         row.addWidget(self.sigma_slider)
         row.addWidget(self.sigma_label)
         self.reroll_button = QPushButton("Re-roll noise")
+        self.reroll_button.setToolTip("Draw new random timing errors for every sensor (each keeps its draw while σ changes)")
         row.addWidget(self.reroll_button)
         row.addSpacing(16)
 
-        row.addWidget(QLabel("Speed of sound c"))
+        c_label = QLabel("Speed of sound c")
+        row.addWidget(c_label)
         self.c_spin = QDoubleSpinBox()
         self.c_spin.setRange(250.0, 400.0)
         self.c_spin.setDecimals(1)
         self.c_spin.setSingleStep(1.0)
         self.c_spin.setSuffix(" m/s")
+        c_tip = (
+            "Speed of sound, used to turn times into distances. In air it is about 331.3 + 0.606·T m/s\n"
+            "(T in °C): 343 m/s at 20 °C. Both the simulated arrival times and the solvers use this value,\n"
+            "so changing it here keeps them consistent; a real system has to estimate it from the weather."
+        )
+        for w in (c_label, self.c_spin):
+            w.setToolTip(c_tip)
         row.addWidget(self.c_spin)
         row.addSpacing(16)
 
-        row.addWidget(QLabel("Reference"))
+        ref_label = QLabel("Reference")
+        row.addWidget(ref_label)
         self.ref_combo = QComboBox()
         self.ref_combo.setMinimumWidth(70)
+        ref_tip = (
+            "The reference sensor: the one whose equation is subtracted from the others, and whose arrival time\n"
+            "the time differences Δt = tᵢ − t_ref are measured from. With 3 or 4 sensors the answer doesn't depend\n"
+            "on the choice, only the equations shown do; with more, least squares weights the equations slightly differently."
+        )
+        for w in (ref_label, self.ref_combo):
+            w.setToolTip(ref_tip)
         row.addWidget(self.ref_combo)
         row.addStretch()
         # Each mode's own widgets (sliders, toggles, …), shown only while that mode is active.

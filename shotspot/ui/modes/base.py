@@ -24,6 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
+from matplotlib.lines import Line2D
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QWidget
 
@@ -39,6 +40,16 @@ class Handle:
     position: np.ndarray
     color: str
     marker: str = "D"
+
+
+def draw_solution_square(ax, snap: Snapshot, position: np.ndarray) -> None:
+    """The closed form's "root" square, at a point that fits the arrival times as well as the estimate does."""
+    ax.scatter(*position, marker="s", s=110, facecolors="none", edgecolors=snap.theme.ink, linewidths=1.5, zorder=13)
+
+
+def solution_square_handle(snap: Snapshot) -> Line2D:
+    return Line2D([], [], marker="s", markerfacecolor="none", color=snap.theme.ink, linestyle="none", markersize=9,
+                  label="other solution (fits the data too)")
 
 
 class Mode(QObject):
@@ -64,7 +75,15 @@ class Mode(QObject):
         self.fix = locate(snap.positions, snap.times, snap.c, snap.reference) if snap.ready else None
 
     def draw(self, ax, snap: Snapshot) -> None:
-        pass
+        other = self.other_solution(snap)
+        if other is not None:
+            draw_solution_square(ax, snap, other)
+
+    def other_solution(self, snap: Snapshot) -> np.ndarray | None:
+        """In an ambiguous layout, the solution the estimate did *not* land on."""
+        if self.fix is None:
+            return None
+        return snap.other_solution(self.fix.position)
 
     def method_html(self, snap: Snapshot) -> str:
         return (
@@ -85,7 +104,7 @@ class Mode(QObject):
 
     def legend_handles(self, snap: Snapshot) -> list:
         """Extra matplotlib handles (with labels) for the field's legend."""
-        return []
+        return [solution_square_handle(snap)] if self.other_solution(snap) is not None else []
 
     def handles(self, snap: Snapshot) -> list[Handle]:
         return []

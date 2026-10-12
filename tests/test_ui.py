@@ -24,7 +24,8 @@ from shotspot.core.scenario import Scenario
 from shotspot.ui.main_window import MainWindow
 from shotspot.ui.snapshot import Snapshot
 from shotspot.ui.modes import MODES, AccuracyMode, ClosedFormMode, GaussNewtonMode, HyperbolaMode, KnownT0Mode, SweepMode
-from shotspot.ui.modes.known_t0 import CIRCLES, STEPS, SUBTRACT
+from shotspot.core.closed_form import solve_closed_form
+from shotspot.ui.modes.known_t0 import CHECK, CIRCLES, STEPS, SUBTRACT, T0_ERROR
 from shotspot.ui.modes.accuracy import ELLIPSE, FALLBACK_SIGMA, TRIALS
 from shotspot.ui.modes.hyperbolas import CROSSING, SIGN
 from shotspot.ui.modes.t0_sweep import SLIDER_TICK, START
@@ -209,6 +210,27 @@ def test_panel_link_selects_a_sensor(win):
     assert win.selected == 2
 
 
+def test_overview_and_field_show_the_other_solution(win):
+    win.load_preset("triangle_ambiguous")
+    win.refresh()
+    overview = win.panel.overview._html
+    assert "Two solutions" in overview and "not</b> the true shot" in overview
+    labels = [h.get_label() for h in win.mode.legend_handles(Snapshot.take(win.scenario, None, win.theme))]
+    assert labels == ["other solution (fits the data too)"]
+    win.load_preset("triangle_inside")
+    win.refresh()
+    assert "Two solutions" not in win.panel.overview._html
+    assert "Arrival times are exact" in win.panel.overview._html
+    win.sigma_slider.setValue(10)
+    win.refresh()
+    assert "keeps its draw" in win.panel.overview._html
+
+
+def test_controls_have_tooltips(win):
+    for widget in (win.sigma_slider, win.reroll_button, win.c_spin, win.ref_combo):
+        assert widget.toolTip()
+
+
 def test_theme_follows_the_system_palette_while_running(win, set_system_palette):
     win.set_selected(0)
     for button, theme in [("#efefef", LIGHT), ("#353535", DARK), ("#efefef", LIGHT)]:
@@ -255,6 +277,24 @@ def test_known_t0_recovers_the_shot_and_says_t0_was_given(win):
     assert "t<sub>0</sub> given, not estimated" in win.panel.overview._html
     assert len(circles_on_field(win)) == len(win.scenario.sensors)
     assert win.panel._step_count == len(STEPS)
+
+
+def test_known_t0_catch_shows_the_wrong_t0_run(win):
+    use_mode(win, KnownT0Mode)
+    win.mode.set_step(CHECK)
+    win.refresh()
+    html = win.panel.method._html
+    assert "shrinks by δ" in html and "slides sideways" in html and "p = u + v·t<sub>0</sub>" in html
+    assert len(circles_on_field(win)) == 2 * len(win.scenario.sensors)  # the real circles and the shrunken ones
+    assert [h.get_label() for h in win.mode.legend_handles(Snapshot.take(win.scenario, None, win.theme))] == [
+        "circles for t₀ 10 ms late", "their best point p′"]
+    # p′ moves along the closed form's line p = u + v·t₀, so it is exactly |v|·Δt₀ from p_est.
+    moved = np.linalg.norm(win.mode.wrong_t0.position - win.mode.result.position)
+    v = solve_closed_form(win.scenario.positions(), win.scenario.measured_times(), win.scenario.c).quadratic.v
+    assert moved == pytest.approx(np.linalg.norm(v) * T0_ERROR, rel=1e-6)
+    win.mode.set_step(SUBTRACT)
+    win.refresh()
+    assert len(circles_on_field(win)) == len(win.scenario.sensors)
 
 
 def test_known_t0_subtract_step_draws_one_line_per_non_reference_sensor(win):
@@ -460,6 +500,20 @@ def test_closed_form_routes_for_four_sensors(win):
     np.testing.assert_allclose(win.mode.fix.position, [500.0, 610.0], atol=1e-6)
 
 
+def test_closed_form_four_sensors_explains_the_unused_reference_equation(win):
+    use_mode(win, ClosedFormMode)
+    win.load_preset("square_four")
+    win.sigma_slider.setValue(20)
+    win.refresh()
+    solve = step_through(win)[2]
+    assert "only ever subtracted" in solve and "polished by Gauss-Newton" in solve
+    gn = win.mode.polished
+    assert gn.converged and gn.iterations[-1].cost < 0.01 * gn.iterations[0].cost
+    win.sigma_slider.setValue(0)
+    win.refresh()
+    assert "nothing to polish" in step_through(win)[2]
+
+
 def test_closed_form_collinear_sensors(win):
     use_mode(win, ClosedFormMode)
     win.clear_scenario()
@@ -532,6 +586,23 @@ def test_accuracy_monte_carlo_runs_and_is_cleared_when_the_shot_moves(win):
     win.scenario.shot = (520.0, 430.0)
     win.refresh()
     assert win.mode.mc is None
+
+
+def test_accuracy_monte_carlo_reports_fixes_at_the_other_solution(win):
+    use_mode(win, AccuracyMode)
+    win.load_preset("triangle_ambiguous")
+    win.refresh()
+    assert win.mode.other is not None and win.mode.cluster.name == "the shot"
+    labels = [h.get_label() for h in win.mode.legend_handles(Snapshot.take(win.scenario, None, win.theme))]
+    assert labels[-1] == "other solution (fits the data too)"
+    view = win.mode.view()
+    view.trials.setValue(50)
+    view.run.click()
+    win.mode.set_step(TRIALS)
+    win.refresh()
+    assert win.mode.cluster.name == "the other solution" and win.mode.cluster.share_other > 0.9
+    html = win.panel.method._html
+    assert "landed at the other solution" in html and "from the other solution" in html
 
 
 def test_accuracy_far_field_ellipse_is_stretched_along_the_line_of_sight(win):

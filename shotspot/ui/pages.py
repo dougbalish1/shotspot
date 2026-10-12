@@ -58,11 +58,50 @@ def overview_html(snap: Snapshot, mode: Mode) -> str:
     out.append("</table>")
     if fix is not None:
         out.append(f'<p class="muted">Estimate from: {mode.estimate_source}.</p>')
+    if snap.ambiguous:
+        out.append(_ambiguity_note(snap, fix))
+    if snap.shot is not None and snap.n:
+        out.append(_noise_note(sc))
 
     out.append(f"<h3>Scenario: {sc.name}</h3>")
     if sc.description:
         out.append(f"<p>{sc.description}</p>")
     return "\n".join(out)
+
+
+def _ambiguity_note(snap: Snapshot, fix) -> str:
+    """Two closed-form roots survived: say so here, where the error is first reported, not only deep in a Method page."""
+    both = " and ".join(
+        f"p = {point(c.position)} m at t<sub>0</sub> = {seconds(c.t0)}" for c in sorted(snap.candidates, key=lambda c: c.t0)
+    )
+    text = (
+        f"<p><b>Two solutions.</b> {both} both fit all three arrival times exactly: two different shots, fired at two "
+        "different times, would make the sensors hear exactly what they heard, so nothing in the data prefers either one. "
+        "The solvers report the later t<sub>0</sub>, the nearer shot"
+    )
+    other = snap.other_solution(snap.shot)
+    if fix is not None and other is not None and np.linalg.norm(fix.position - other) < 1.0:
+        text += ", which here is <b>not</b> the true shot: that is the whole error above"
+    text += (
+        ". Only a 4th sensor can settle it. The square on the field marks the other solution; Closed form (step 5) shows "
+        "both roots, the t<sub>0</sub> sweep has two dips, and the TDOA hyperbolas cross twice.</p>"
+    )
+    return text
+
+
+def _noise_note(sc) -> str:
+    if sc.sigma > 0:
+        return (
+            '<p class="note">Timing noise: each sensor reports its true arrival time plus an error drawn from a Gaussian '
+            f"with standard deviation σ = {millis(sc.sigma, 2)}, independently of the other sensors (the Per-sensor tab lists "
+            "each one). Every sensor keeps its draw while the slider moves, so the slider scales the same errors up or down; "
+            "<i>Re-roll noise</i> draws new ones. In a real system the clocks themselves agree to microseconds (GPS); the "
+            "milliseconds come from deciding exactly when the bang began in a waveform smeared by echoes.</p>"
+        )
+    return (
+        '<p class="note">Arrival times are exact. The Timing noise slider adds a random error with standard deviation σ to '
+        f"each sensor's time; 1 ms of it is c × 1 ms = {meters(sc.c * 1e-3)} of range.</p>"
+    )
 
 
 # ---- Per-sensor -------------------------------------------------------------
